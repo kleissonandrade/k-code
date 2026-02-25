@@ -66,13 +66,17 @@ pub struct GitColors {
 pub enum ThemeName {
     Amethyst,
     Aureum,
+    Dracula,
+    Airo,
 }
 
 impl ThemeName {
     pub fn next(&self) -> Self {
         match self {
             Self::Amethyst => Self::Aureum,
-            Self::Aureum => Self::Amethyst,
+            Self::Aureum => Self::Dracula,
+            Self::Dracula => Self::Airo,
+            Self::Airo => Self::Amethyst,
         }
     }
 }
@@ -82,6 +86,8 @@ impl std::fmt::Display for ThemeName {
         match self {
             Self::Amethyst => write!(f, "Amethyst"),
             Self::Aureum => write!(f, "Aureum"),
+            Self::Dracula => write!(f, "Dracula"),
+            Self::Airo => write!(f, "Airo"),
         }
     }
 }
@@ -192,9 +198,117 @@ pub fn aureum() -> Theme {
     }
 }
 
+pub fn dracula() -> Theme {
+    Theme {
+        name: "Dracula".to_string(),
+        ui: UiColors {
+            background: Color::Rgb(40, 42, 54),
+            foreground: Color::Rgb(248, 248, 242),
+            cursor: Color::Rgb(189, 147, 249),
+            selection: Color::Rgb(68, 71, 90),
+            line_number: Color::Rgb(98, 114, 164),
+            line_number_active: Color::Rgb(248, 248, 242),
+            status_bar_bg: Color::Rgb(33, 34, 44),
+            status_bar_fg: Color::Rgb(248, 248, 242),
+            status_bar_mode_bg: Color::Rgb(189, 147, 249),
+            status_bar_mode_fg: Color::Rgb(40, 42, 54),
+            tab_active_bg: Color::Rgb(68, 71, 90),
+            tab_active_fg: Color::Rgb(248, 248, 242),
+            tab_inactive_bg: Color::Rgb(33, 34, 44),
+            tab_inactive_fg: Color::Rgb(98, 114, 164),
+            file_tree_bg: Color::Rgb(33, 34, 44),
+            file_tree_fg: Color::Rgb(248, 248, 242),
+            file_tree_selected_bg: Color::Rgb(68, 71, 90),
+            file_tree_selected_fg: Color::Rgb(248, 248, 242),
+            file_tree_dir: Color::Rgb(139, 233, 253),
+            border: Color::Rgb(68, 71, 90),
+            search_match: Color::Rgb(241, 250, 140),
+            search_current: Color::Rgb(255, 184, 108),
+            popup_bg: Color::Rgb(33, 34, 44),
+            popup_border: Color::Rgb(189, 147, 249),
+            accent: Color::Rgb(189, 147, 249),
+        },
+        syntax: SyntaxColors {
+            keyword: Color::Rgb(255, 121, 198),    // Pink
+            string: Color::Rgb(241, 250, 140),     // Yellow
+            number: Color::Rgb(189, 147, 249),     // Purple
+            comment: Color::Rgb(98, 114, 164),     // Comment
+            function: Color::Rgb(80, 250, 123),    // Green
+            r#type: Color::Rgb(139, 233, 253),     // Cyan
+            variable: Color::Rgb(248, 248, 242),   // Foreground
+            constant: Color::Rgb(189, 147, 249),   // Purple
+            operator: Color::Rgb(255, 121, 198),   // Pink
+            punctuation: Color::Rgb(248, 248, 242),
+        },
+        git: GitColors {
+            added: Color::Rgb(80, 250, 123),       // Green
+            modified: Color::Rgb(255, 184, 108),   // Orange
+            deleted: Color::Rgb(255, 85, 85),      // Red
+            renamed: Color::Rgb(139, 233, 253),    // Cyan
+            conflict: Color::Rgb(255, 184, 108),   // Orange
+            branch: Color::Rgb(189, 147, 249),     // Purple
+        },
+    }
+}
+
+pub fn airo() -> Theme {
+    Theme {
+        name: "Airo".to_string(),
+        ui: UiColors {
+            background: Color::Rgb(15, 20, 25),
+            foreground: Color::Rgb(200, 210, 220),
+            cursor: Color::Rgb(0, 180, 216),
+            selection: Color::Rgb(30, 60, 80),
+            line_number: Color::Rgb(55, 70, 85),
+            line_number_active: Color::Rgb(0, 180, 216),
+            status_bar_bg: Color::Rgb(10, 15, 20),
+            status_bar_fg: Color::Rgb(140, 200, 230),
+            status_bar_mode_bg: Color::Rgb(0, 180, 216),
+            status_bar_mode_fg: Color::Rgb(15, 20, 25),
+            tab_active_bg: Color::Rgb(25, 40, 55),
+            tab_active_fg: Color::Rgb(140, 200, 230),
+            tab_inactive_bg: Color::Rgb(12, 17, 22),
+            tab_inactive_fg: Color::Rgb(70, 90, 110),
+            file_tree_bg: Color::Rgb(12, 17, 22),
+            file_tree_fg: Color::Rgb(170, 185, 200),
+            file_tree_selected_bg: Color::Rgb(25, 45, 65),
+            file_tree_selected_fg: Color::Rgb(200, 225, 245),
+            file_tree_dir: Color::Rgb(0, 180, 216),
+            border: Color::Rgb(40, 55, 70),
+            search_match: Color::Rgb(60, 120, 160),
+            search_current: Color::Rgb(0, 210, 250),
+            popup_bg: Color::Rgb(12, 17, 22),
+            popup_border: Color::Rgb(0, 180, 216),
+            accent: Color::Rgb(0, 180, 216),
+        },
+        syntax: SyntaxColors {
+            keyword: Color::Rgb(255, 121, 198),
+            string: Color::Rgb(130, 224, 170),
+            number: Color::Rgb(255, 183, 77),
+            comment: Color::Rgb(70, 90, 110),
+            function: Color::Rgb(100, 200, 255),
+            r#type: Color::Rgb(0, 210, 250),
+            variable: Color::Rgb(200, 210, 220),
+            constant: Color::Rgb(255, 183, 77),
+            operator: Color::Rgb(255, 121, 198),
+            punctuation: Color::Rgb(140, 160, 180),
+        },
+        git: GitColors {
+            added: Color::Rgb(80, 250, 123),
+            modified: Color::Rgb(0, 180, 216),
+            deleted: Color::Rgb(255, 85, 85),
+            renamed: Color::Rgb(130, 224, 170),
+            conflict: Color::Rgb(255, 183, 77),
+            branch: Color::Rgb(0, 180, 216),
+        },
+    }
+}
+
 pub fn get_theme(name: ThemeName) -> Theme {
     match name {
         ThemeName::Amethyst => amethyst(),
         ThemeName::Aureum => aureum(),
+        ThemeName::Dracula => dracula(),
+        ThemeName::Airo => airo(),
     }
 }
