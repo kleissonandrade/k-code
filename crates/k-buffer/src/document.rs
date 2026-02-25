@@ -35,6 +35,19 @@ impl Document {
         }
     }
 
+    pub fn from_string(content: &str, name: &str, language: Option<String>) -> Self {
+        Self {
+            id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            path: Some(PathBuf::from(name)),
+            rope: Rope::from_str(content),
+            cursor: CursorState::default(),
+            modified: false,
+            language,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+        }
+    }
+
     pub fn from_file(path: PathBuf) -> Result<Self, std::io::Error> {
         let content = std::fs::read_to_string(&path)?;
         let lang = path

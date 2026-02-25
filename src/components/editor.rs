@@ -115,6 +115,18 @@ impl EditorComponent {
         self.search_matches.get(self.current_match).copied()
     }
 
+    /// Returns the Rect of the revert button if a diff toolbar is shown, for click detection.
+    pub fn diff_revert_button_area(&self, area: Rect, doc: &Document) -> Option<Rect> {
+        if doc.language.as_deref() != Some("diff") {
+            return None;
+        }
+        // Revert button is at the right side of the first row
+        // " ↩ Revert " = 10 chars
+        let btn_width: u16 = 10;
+        let btn_x = area.x + area.width.saturating_sub(btn_width + 1);
+        Some(Rect::new(btn_x, area.y, btn_width, 1))
+    }
+
     pub fn render(
         &self,
         frame: &mut Frame,
@@ -124,6 +136,54 @@ impl EditorComponent {
         theme: &Theme,
         highlighter: &Highlighter,
     ) {
+        let is_diff = doc.language.as_deref() == Some("diff");
+
+        // Diff toolbar takes 1 row at the top
+        let (toolbar_area, editor_area) = if is_diff {
+            let toolbar = Rect::new(area.x, area.y, area.width, 1);
+            let editor = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
+            (Some(toolbar), editor)
+        } else {
+            (None, area)
+        };
+
+        // Render diff toolbar
+        if let Some(tb_area) = toolbar_area {
+            let file_name = doc
+                .path
+                .as_ref()
+                .and_then(|p| p.to_str())
+                .unwrap_or("")
+                .strip_prefix("diff: ")
+                .unwrap_or(
+                    doc.path.as_ref().and_then(|p| p.to_str()).unwrap_or(""),
+                );
+
+            let btn_width: u16 = 10;
+            let name_width = tb_area.width.saturating_sub(btn_width + 2);
+
+            let toolbar_line = Line::from(vec![
+                Span::styled(
+                    format!(" \u{f440} {:<width$}", file_name, width = name_width as usize),
+                    Style::default()
+                        .fg(theme.ui.foreground)
+                        .bg(theme.ui.tab_active_bg),
+                ),
+                Span::styled(
+                    " \u{f0e2} Revert ",
+                    Style::default()
+                        .fg(theme.git.deleted)
+                        .bg(theme.ui.tab_active_bg)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " ",
+                    Style::default().bg(theme.ui.tab_active_bg),
+                ),
+            ]);
+            frame.render_widget(Paragraph::new(vec![toolbar_line]), tb_area);
+        }
+
         let line_count = doc.line_count();
         let gutter_width = if line_count > 0 {
             (line_count.to_string().len() as u16).max(3) + 2
@@ -131,7 +191,7 @@ impl EditorComponent {
             5
         };
 
-        let visible_lines = area.height as usize;
+        let visible_lines = editor_area.height as usize;
         let start = self.viewport.top_line;
         let end = (start + visible_lines).min(line_count);
 
@@ -145,8 +205,14 @@ impl EditorComponent {
         let line_texts: Vec<String> = (start..end)
             .map(|i| doc.get_line(i).unwrap_or_default())
             .collect();
-        let line_refs: Vec<&str> = line_texts.iter().map(|s| s.as_str()).collect();
-        let highlighted = highlighter.highlight_lines(&line_refs, ext);
+
+        // Only use syntax highlighter for non-diff files
+        let highlighted = if is_diff {
+            Vec::new()
+        } else {
+            let line_refs: Vec<&str> = line_texts.iter().map(|s| s.as_str()).collect();
+            highlighter.highlight_lines(&line_refs, ext)
+        };
 
         let mut lines: Vec<Line> = Vec::with_capacity(visible_lines);
 
@@ -163,35 +229,46 @@ impl EditorComponent {
             let num_str = format!("{:>width$} ", line_idx + 1, width = gutter_width as usize - 2);
             spans.push(Span::styled(num_str, num_style));
 
-            // Syntax-highlighted content
-            if idx < highlighted.len() {
-                for hl_span in &highlighted[idx].spans {
-                    let mut style = Style::default().fg(Color::Rgb(
-                        hl_span.fg.0,
-                        hl_span.fg.1,
-                        hl_span.fg.2,
-                    ));
-                    if hl_span.style_bold {
-                        style = style.add_modifier(Modifier::BOLD);
-                    }
-                    if hl_span.style_italic {
-                        style = style.add_modifier(Modifier::ITALIC);
-                    }
+            if is_diff {
+                // Diff coloring based on line prefix
+                let text = &line_texts[idx];
+                let (fg, bg) = if text.starts_with('+') && !text.starts_with("+++") {
+                    (theme.git.added, Color::Rgb(0, 40, 0))
+                } else if text.starts_with('-') && !text.starts_with("---") {
+                    (theme.git.deleted, Color::Rgb(40, 0, 0))
+                } else if text.starts_with("@@") {
+                    (theme.ui.accent, theme.ui.background)
+                } else if text.starts_with("diff ") || text.starts_with("index ") || text.starts_with("+++") || text.starts_with("---") {
+                    (theme.ui.accent, theme.ui.background)
+                } else {
+                    (theme.ui.foreground, theme.ui.background)
+                };
+                spans.push(Span::styled(text.clone(), Style::default().fg(fg).bg(bg)));
+            } else {
+                // Syntax-highlighted content
+                if idx < highlighted.len() {
+                    for hl_span in &highlighted[idx].spans {
+                        let mut style = Style::default().fg(Color::Rgb(
+                            hl_span.fg.0,
+                            hl_span.fg.1,
+                            hl_span.fg.2,
+                        ));
+                        if hl_span.style_bold {
+                            style = style.add_modifier(Modifier::BOLD);
+                        }
+                        if hl_span.style_italic {
+                            style = style.add_modifier(Modifier::ITALIC);
+                        }
 
-                    let text = hl_span.text.replace('\n', "");
-                    if !text.is_empty() {
-                        spans.push(Span::styled(text, style));
+                        let text = hl_span.text.replace('\n', "");
+                        if !text.is_empty() {
+                            spans.push(Span::styled(text, style));
+                        }
                     }
                 }
             }
 
-            // Current line highlight
-            if is_current {
-                let line = Line::from(spans);
-                lines.push(line);
-            } else {
-                lines.push(Line::from(spans));
-            }
+            lines.push(Line::from(spans));
         }
 
         // Fill remaining lines with tildes
@@ -211,13 +288,13 @@ impl EditorComponent {
         );
 
         let paragraph = Paragraph::new(lines).block(editor_block);
-        frame.render_widget(paragraph, area);
+        frame.render_widget(paragraph, editor_area);
 
         // Render cursor
         if mode == EditorMode::Insert || mode == EditorMode::Normal {
-            let cursor_y = area.y + (doc.cursor.line.saturating_sub(self.viewport.top_line)) as u16;
-            let cursor_x = area.x + gutter_width + doc.cursor.col as u16;
-            if cursor_y < area.y + area.height && cursor_x < area.x + area.width {
+            let cursor_y = editor_area.y + (doc.cursor.line.saturating_sub(self.viewport.top_line)) as u16;
+            let cursor_x = editor_area.x + gutter_width + doc.cursor.col as u16;
+            if cursor_y < editor_area.y + editor_area.height && cursor_x < editor_area.x + editor_area.width {
                 frame.set_cursor_position((cursor_x, cursor_y));
             }
         }

@@ -133,6 +133,30 @@ impl FileTreeComponent {
         self.entries.get(self.selected)
     }
 
+    /// Expand all ancestors of `target` and select it in the tree.
+    pub fn reveal_path(&mut self, target: &Path) {
+        // Expand every ancestor directory between root and target
+        let mut ancestor = target.to_path_buf();
+        while let Some(parent) = ancestor.parent() {
+            if parent == self.root || parent.starts_with(&self.root) {
+                self.expanded.insert(parent.to_path_buf());
+            }
+            if parent == self.root {
+                break;
+            }
+            ancestor = parent.to_path_buf();
+        }
+        self.refresh();
+
+        // Find and select the entry matching target
+        for (idx, entry) in self.entries.iter().enumerate() {
+            if entry.path == target {
+                self.selected = idx;
+                break;
+            }
+        }
+    }
+
     pub fn move_up(&mut self) {
         if self.selected > 0 {
             self.selected -= 1;

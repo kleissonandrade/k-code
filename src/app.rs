@@ -43,6 +43,7 @@ pub struct App {
     pub clipboard: String,
     pub workspace_root: PathBuf,
     pub status_message: String,
+    last_revealed_path: Option<PathBuf>,
 
     pub config: AppConfig,
     pub theme_name: ThemeName,
@@ -86,6 +87,7 @@ impl App {
             clipboard: String::new(),
             workspace_root: workspace_root.clone(),
             status_message: String::new(),
+            last_revealed_path: None,
             config,
             theme_name,
             theme,
@@ -132,6 +134,104 @@ impl App {
                 self.status_message = format!("Error: {}", e);
             }
         }
+    }
+
+    fn revert_current_diff(&mut self) {
+        let doc = &self.documents[self.active_doc];
+        if doc.language.as_deref() != Some("diff") {
+            return;
+        }
+        // Extract original file path from tab name "diff: <path>"
+        let file_path = doc
+            .path
+            .as_ref()
+            .and_then(|p| p.to_str())
+            .and_then(|s| s.strip_prefix("diff: "))
+            .map(|s| s.to_string());
+
+        let Some(file_path) = file_path else { return };
+
+        // git checkout -- <file> to revert changes
+        let result = std::process::Command::new("git")
+            .args(["checkout", "--", &file_path])
+            .current_dir(&self.workspace_root)
+            .output();
+
+        match result {
+            Ok(out) if out.status.success() => {
+                // Close the diff tab
+                if self.documents.len() > 1 {
+                    self.documents.remove(self.active_doc);
+                    if self.active_doc >= self.documents.len() {
+                        self.active_doc = self.documents.len() - 1;
+                    }
+                    self.editor.viewport.top_line = 0;
+                }
+                self.status_message = format!("Reverted: {}", file_path);
+            }
+            Ok(out) => {
+                let err = String::from_utf8_lossy(&out.stderr).to_string();
+                self.status_message = format!("Revert failed: {}", err.trim());
+            }
+            Err(e) => {
+                self.status_message = format!("Revert failed: {}", e);
+            }
+        }
+    }
+
+    fn open_diff_for_file(&mut self, file_path: &str) {
+        let output = std::process::Command::new("git")
+            .args(["diff", "HEAD", "--", file_path])
+            .current_dir(&self.workspace_root)
+            .output();
+
+        let diff_text = match output {
+            Ok(out) => {
+                let text = String::from_utf8_lossy(&out.stdout).to_string();
+                if text.is_empty() {
+                    // Try unstaged diff
+                    let out2 = std::process::Command::new("git")
+                        .args(["diff", "--", file_path])
+                        .current_dir(&self.workspace_root)
+                        .output();
+                    match out2 {
+                        Ok(o) => {
+                            let t = String::from_utf8_lossy(&o.stdout).to_string();
+                            if t.is_empty() {
+                                // Untracked file - show full content
+                                let full_path = self.workspace_root.join(file_path);
+                                std::fs::read_to_string(&full_path)
+                                    .map(|content| {
+                                        content
+                                            .lines()
+                                            .map(|l| format!("+{}", l))
+                                            .collect::<Vec<_>>()
+                                            .join("\n")
+                                    })
+                                    .unwrap_or_else(|_| "No diff available".to_string())
+                            } else {
+                                t
+                            }
+                        }
+                        Err(_) => "Failed to get diff".to_string(),
+                    }
+                } else {
+                    text
+                }
+            }
+            Err(_) => "Failed to run git diff".to_string(),
+        };
+
+        let tab_name = format!("diff: {}", file_path);
+        let doc = Document::from_string(&diff_text, &tab_name, Some("diff".to_string()));
+        self.documents.push(doc);
+        self.active_doc = self.documents.len() - 1;
+        self.editor.viewport.top_line = 0;
+        self.focus = FocusTarget::Editor;
+        // Close git panel
+        self.git_panel.reset();
+        self.mode = EditorMode::Normal;
+        self.activity_bar.active = ActivityItem::FileTree;
     }
 
     pub fn handle_event(&mut self, event: Event) -> Action {
@@ -442,6 +542,13 @@ impl App {
                 }
                 (KeyModifiers::NONE, KeyCode::Enter) => {
                     match self.git_panel.active_tab {
+                        crate::components::git_panel::GitTab::Diff => {
+                            if let Some(file) = self.git_panel.selected_changed_file() {
+                                let path = file.path.clone();
+                                self.open_diff_for_file(&path);
+                            }
+                            Action::Noop
+                        }
                         crate::components::git_panel::GitTab::Branches => {
                             if let Some(branch) =
                                 self.git_panel.branches.get(self.git_panel.selected)
@@ -513,7 +620,7 @@ impl App {
                     return Action::Noop;
                 }
 
-                // Git panel tab click (overlay)
+                // Git panel click (overlay)
                 if self.mode == EditorMode::GitPanel && !self.git_panel.editing_commit {
                     let popup_area = crate::layout::centered_rect(75, 75, self.last_area);
                     let block = ratatui::widgets::Block::default()
@@ -527,6 +634,16 @@ impl App {
                             self.refresh_git_tab();
                         }
                         return Action::Noop;
+                    }
+                    // Click on Changes tab content - open diff
+                    if self.git_panel.active_tab == crate::components::git_panel::GitTab::Diff {
+                        if let Some(_idx) = self.git_panel.click_change_at(x, y, self.last_area) {
+                            if let Some(file) = self.git_panel.selected_changed_file() {
+                                let path = file.path.clone();
+                                self.open_diff_for_file(&path);
+                                return Action::Noop;
+                            }
+                        }
                     }
                 }
                 let tree_width = if self.file_tree.visible {
@@ -581,6 +698,22 @@ impl App {
                         }
                     }
                 } else {
+                    // Check revert button click on diff toolbar
+                    let doc = &self.documents[self.active_doc];
+                    let editor_area = {
+                        let app_layout = layout::build_layout(
+                            self.last_area,
+                            self.file_tree.visible,
+                            self.config.file_tree.width,
+                        );
+                        app_layout.editor
+                    };
+                    if let Some(btn) = self.editor.diff_revert_button_area(editor_area, doc) {
+                        if x >= btn.x && x < btn.x + btn.width && y == btn.y {
+                            self.revert_current_diff();
+                            return Action::Noop;
+                        }
+                    }
                     self.focus = FocusTarget::Editor;
                 }
                 Action::Noop
@@ -604,6 +737,10 @@ impl App {
             MouseEventKind::Moved => {
                 if self.mode == EditorMode::FuzzyFinder {
                     self.fuzzy_finder.hover_at(mouse.column, mouse.row, self.last_area);
+                } else if self.mode == EditorMode::GitPanel
+                    && self.git_panel.active_tab == crate::components::git_panel::GitTab::Diff
+                {
+                    self.git_panel.hover_change_at(mouse.column, mouse.row, self.last_area);
                 }
                 Action::Noop
             }
@@ -968,6 +1105,9 @@ impl App {
         if let Some(ref repo) = self.git_repo {
             match self.git_panel.active_tab {
                 crate::components::git_panel::GitTab::Status => repo.request_status(),
+                crate::components::git_panel::GitTab::Diff => {
+                    self.git_panel.load_branch_changes(&self.workspace_root);
+                }
                 crate::components::git_panel::GitTab::Branches => repo.request_branches(),
                 crate::components::git_panel::GitTab::Stash => repo.request_stash_list(),
                 crate::components::git_panel::GitTab::Log => repo.request_log(100),
@@ -1131,7 +1271,20 @@ impl App {
         self.status_message = format!("Definition not found: {}", word);
     }
 
+    fn sync_tree_to_active_doc(&mut self) {
+        let current_path = self.documents[self.active_doc].path.clone();
+        if current_path.is_some() && current_path != self.last_revealed_path {
+            self.last_revealed_path = current_path.clone();
+            if let Some(ref path) = current_path {
+                if self.file_tree.visible {
+                    self.file_tree.reveal_path(path);
+                }
+            }
+        }
+    }
+
     pub fn render(&mut self, frame: &mut Frame) {
+        self.sync_tree_to_active_doc();
         let area = frame.area();
         self.last_area = area;
         let app_layout =

@@ -248,10 +248,17 @@ fn git_worker(
 }
 
 fn handle_status(repo: &Repository) -> GitResponse {
-    match repo.statuses(None) {
+    let mut opts = git2::StatusOptions::new();
+    opts.include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .exclude_submodules(true)
+        .include_ignored(false);
+
+    match repo.statuses(Some(&mut opts)) {
         Ok(statuses) => {
             let entries: Vec<StatusEntry> = statuses
                 .iter()
+                .filter(|s| !s.status().is_ignored())
                 .map(|s| {
                     let kind = if s.status().is_wt_new() || s.status().is_index_new() {
                         StatusKind::New
