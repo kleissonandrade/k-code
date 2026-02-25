@@ -68,6 +68,7 @@ pub enum ThemeName {
     Aureum,
     Dracula,
     Airo,
+    Monokai,
 }
 
 impl ThemeName {
@@ -76,7 +77,8 @@ impl ThemeName {
             Self::Amethyst => Self::Aureum,
             Self::Aureum => Self::Dracula,
             Self::Dracula => Self::Airo,
-            Self::Airo => Self::Amethyst,
+            Self::Airo => Self::Monokai,
+            Self::Monokai => Self::Amethyst,
         }
     }
 }
@@ -88,6 +90,7 @@ impl std::fmt::Display for ThemeName {
             Self::Aureum => write!(f, "Aureum"),
             Self::Dracula => write!(f, "Dracula"),
             Self::Airo => write!(f, "Airo"),
+            Self::Monokai => write!(f, "Monokai"),
         }
     }
 }
@@ -304,11 +307,65 @@ pub fn airo() -> Theme {
     }
 }
 
+pub fn monokai() -> Theme {
+    Theme {
+        name: "Monokai".to_string(),
+        ui: UiColors {
+            background: Color::Rgb(39, 40, 34),
+            foreground: Color::Rgb(248, 248, 242),
+            cursor: Color::Rgb(248, 248, 240),
+            selection: Color::Rgb(73, 72, 62),
+            line_number: Color::Rgb(90, 90, 80),
+            line_number_active: Color::Rgb(248, 248, 242),
+            status_bar_bg: Color::Rgb(30, 31, 26),
+            status_bar_fg: Color::Rgb(248, 248, 242),
+            status_bar_mode_bg: Color::Rgb(166, 226, 46),
+            status_bar_mode_fg: Color::Rgb(39, 40, 34),
+            tab_active_bg: Color::Rgb(73, 72, 62),
+            tab_active_fg: Color::Rgb(248, 248, 242),
+            tab_inactive_bg: Color::Rgb(30, 31, 26),
+            tab_inactive_fg: Color::Rgb(117, 113, 94),
+            file_tree_bg: Color::Rgb(30, 31, 26),
+            file_tree_fg: Color::Rgb(248, 248, 242),
+            file_tree_selected_bg: Color::Rgb(73, 72, 62),
+            file_tree_selected_fg: Color::Rgb(248, 248, 242),
+            file_tree_dir: Color::Rgb(102, 217, 239),
+            border: Color::Rgb(73, 72, 62),
+            search_match: Color::Rgb(230, 219, 116),
+            search_current: Color::Rgb(249, 38, 114),
+            popup_bg: Color::Rgb(30, 31, 26),
+            popup_border: Color::Rgb(166, 226, 46),
+            accent: Color::Rgb(166, 226, 46),
+        },
+        syntax: SyntaxColors {
+            keyword: Color::Rgb(249, 38, 114),      // Monokai Pink/Red
+            string: Color::Rgb(230, 219, 116),      // Monokai Yellow
+            number: Color::Rgb(174, 129, 255),      // Monokai Purple
+            comment: Color::Rgb(117, 113, 94),      // Monokai Comment
+            function: Color::Rgb(166, 226, 46),     // Monokai Green
+            r#type: Color::Rgb(102, 217, 239),      // Monokai Cyan
+            variable: Color::Rgb(248, 248, 242),    // Monokai Foreground
+            constant: Color::Rgb(174, 129, 255),    // Monokai Purple
+            operator: Color::Rgb(249, 38, 114),     // Monokai Pink/Red
+            punctuation: Color::Rgb(248, 248, 242),
+        },
+        git: GitColors {
+            added: Color::Rgb(166, 226, 46),        // Green
+            modified: Color::Rgb(230, 219, 116),    // Yellow
+            deleted: Color::Rgb(249, 38, 114),      // Pink/Red
+            renamed: Color::Rgb(102, 217, 239),     // Cyan
+            conflict: Color::Rgb(253, 151, 31),     // Orange
+            branch: Color::Rgb(174, 129, 255),      // Purple
+        },
+    }
+}
+
 pub fn get_theme(name: ThemeName) -> Theme {
     match name {
         ThemeName::Amethyst => amethyst(),
         ThemeName::Aureum => aureum(),
         ThemeName::Dracula => dracula(),
         ThemeName::Airo => airo(),
+        ThemeName::Monokai => monokai(),
     }
 }
