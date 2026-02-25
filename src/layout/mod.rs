@@ -1,6 +1,9 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
+pub const ACTIVITY_BAR_WIDTH: u16 = 7;
+
 pub struct AppLayout {
+    pub activity_bar: Rect,
     pub file_tree: Option<Rect>,
     pub tab_bar: Rect,
     pub editor: Rect,
@@ -8,47 +11,55 @@ pub struct AppLayout {
 }
 
 pub fn build_layout(area: Rect, show_tree: bool, tree_width: u16) -> AppLayout {
-    let main_chunks = if show_tree {
+    // First split: status bar at bottom, main content above
+    let vert = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(area);
+
+    let main_area = vert[0];
+    let status_bar = vert[1];
+
+    // Horizontal split: activity bar | file tree (optional) | editor area
+    let horiz = if show_tree {
         Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
+                Constraint::Length(ACTIVITY_BAR_WIDTH),
                 Constraint::Length(tree_width),
                 Constraint::Min(1),
             ])
-            .split(area)
+            .split(main_area)
     } else {
         Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Min(1)])
-            .split(area)
+            .constraints([
+                Constraint::Length(ACTIVITY_BAR_WIDTH),
+                Constraint::Min(1),
+            ])
+            .split(main_area)
     };
 
-    let tree_area = if show_tree {
-        Some(main_chunks[0])
+    let activity_bar = horiz[0];
+
+    let (tree_area, right) = if show_tree {
+        (Some(horiz[1]), horiz[2])
     } else {
-        None
+        (None, horiz[1])
     };
 
-    let right = if show_tree {
-        main_chunks[1]
-    } else {
-        main_chunks[0]
-    };
-
+    // Right side: tab bar + editor
     let right_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
         .split(right);
 
     AppLayout {
+        activity_bar,
         file_tree: tree_area,
         tab_bar: right_chunks[0],
         editor: right_chunks[1],
-        status_bar: right_chunks[2],
+        status_bar,
     }
 }
 

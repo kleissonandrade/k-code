@@ -1,3 +1,4 @@
+pub mod activity_bar;
 pub mod command_palette;
 pub mod editor;
 pub mod file_tree;

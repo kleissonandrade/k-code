@@ -9,6 +9,7 @@ use k_git::GitRepository;
 use k_syntax::Highlighter;
 
 use crate::action::{Action, CursorMotion};
+use crate::components::activity_bar::{ActivityBarComponent, ActivityItem};
 use crate::components::command_palette::{CommandAction, CommandPaletteComponent};
 use crate::components::editor::EditorComponent;
 use crate::components::file_tree::FileTreeComponent;
@@ -48,6 +49,7 @@ pub struct App {
     pub theme: Theme,
 
     pub keymap: KeyMap,
+    pub activity_bar: ActivityBarComponent,
     pub editor: EditorComponent,
     pub file_tree: FileTreeComponent,
     pub fuzzy_finder: FuzzyFinderComponent,
@@ -88,6 +90,7 @@ impl App {
             theme_name,
             theme,
             keymap: KeyMap::new(),
+            activity_bar: ActivityBarComponent::new(),
             editor: EditorComponent::new(),
             file_tree: FileTreeComponent::new(workspace_root.clone()),
             fuzzy_finder: FuzzyFinderComponent::new(workspace_root),
@@ -487,13 +490,37 @@ impl App {
                     }
                 }
 
+                let ab_width = crate::layout::ACTIVITY_BAR_WIDTH;
                 let tree_width = if self.file_tree.visible {
                     self.config.file_tree.width
                 } else {
                     0
                 };
+                let tree_end = ab_width + tree_width;
 
-                if x < tree_width && self.file_tree.visible {
+                if x < ab_width {
+                    // Activity bar click
+                    let ab_area = Rect::new(0, 0, ab_width, self.last_area.height.saturating_sub(1));
+                    if let Some(item) = self.activity_bar.item_at_y(x, y, ab_area) {
+                        match item {
+                            ActivityItem::FileTree => {
+                                self.activity_bar.active = ActivityItem::FileTree;
+                                if self.mode != EditorMode::Normal {
+                                    self.mode = EditorMode::Normal;
+                                }
+                                return Action::ToggleFileTree;
+                            }
+                            ActivityItem::Git => {
+                                self.activity_bar.active = ActivityItem::Git;
+                                return Action::EnterMode(EditorMode::GitPanel);
+                            }
+                            ActivityItem::Search => {
+                                self.activity_bar.active = ActivityItem::Search;
+                                return Action::EnterMode(EditorMode::FuzzyFinder);
+                            }
+                        }
+                    }
+                } else if x < tree_end && self.file_tree.visible {
                     // File tree click
                     self.focus = FocusTarget::FileTree;
                     let row = y as usize;
@@ -510,12 +537,12 @@ impl App {
                             }
                         }
                     }
-                } else if y == 0 && x >= tree_width {
+                } else if y == 0 && x >= tree_end {
                     // Tab bar click
                     if let Some(tab_idx) = TabBarComponent::tab_at_x(
                         &self.documents,
                         x,
-                        tree_width,
+                        tree_end,
                     ) {
                         if tab_idx < self.documents.len() {
                             self.active_doc = tab_idx;
@@ -563,6 +590,9 @@ impl App {
                     }
                     EditorMode::Tutorial => {
                         self.tutorial.reset();
+                    }
+                    EditorMode::Normal | EditorMode::Insert => {
+                        self.activity_bar.active = ActivityItem::FileTree;
                     }
                     _ => {}
                 }
@@ -1070,6 +1100,8 @@ impl App {
 
         let line_count = self.documents[self.active_doc].line_count();
         self.editor.update_viewport_size(app_layout.editor, line_count);
+
+        self.activity_bar.render(frame, app_layout.activity_bar, &self.theme);
 
         if let Some(tree_area) = app_layout.file_tree {
             self.file_tree.render(frame, tree_area, &self.theme);
