@@ -1,0 +1,11 @@
+[package]
+name = "k-git"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+git2 = "0.19"
+tokio = { version = "1", features = ["sync", "rt"] }
+crossbeam-channel = "0.5"
+thiserror = "2"
+tracing = "0.1"
