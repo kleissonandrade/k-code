@@ -19,26 +19,32 @@ pub struct FuzzyFinderComponent {
     all_files: Vec<PathBuf>,
     filtered: Vec<(PathBuf, i64)>,
     pub selected: usize,
+    pub hovered: Option<usize>,
     root: PathBuf,
     matcher: SkimMatcherV2,
+    files_loaded: bool,
 }
 
 impl FuzzyFinderComponent {
     pub fn new(root: PathBuf) -> Self {
-        let mut finder = Self {
+        Self {
             input: String::new(),
             cursor_pos: 0,
             all_files: Vec::new(),
             filtered: Vec::new(),
             selected: 0,
+            hovered: None,
             root,
             matcher: SkimMatcherV2::default(),
-        };
-        finder.load_files();
-        finder
+            files_loaded: false,
+        }
     }
 
     pub fn load_files(&mut self) {
+        if self.files_loaded {
+            self.filter();
+            return;
+        }
         self.all_files.clear();
         let walker = WalkBuilder::new(&self.root)
             .hidden(true)
@@ -50,14 +56,44 @@ impl FuzzyFinderComponent {
                 self.all_files.push(entry.into_path());
             }
         }
+        self.files_loaded = true;
         self.filter();
+    }
+
+    pub fn invalidate_cache(&mut self) {
+        self.files_loaded = false;
     }
 
     pub fn reset(&mut self) {
         self.input.clear();
         self.cursor_pos = 0;
         self.selected = 0;
+        self.hovered = None;
         self.filter();
+    }
+
+    /// Update hover state based on mouse position. Returns true if inside the popup.
+    pub fn hover_at(&mut self, x: u16, y: u16, area: Rect) -> bool {
+        let popup_area = centered_rect(60, 60, area);
+        let block = ratatui::widgets::Block::default()
+            .borders(ratatui::widgets::Borders::ALL);
+        let inner = block.inner(popup_area);
+
+        if x < inner.x || x >= inner.x + inner.width || y < inner.y || y >= inner.y + inner.height {
+            self.hovered = None;
+            return false;
+        }
+
+        let rel_y = (y - inner.y) as usize;
+        if rel_y >= 2 {
+            let idx = rel_y - 2;
+            if idx < self.filtered.len() {
+                self.hovered = Some(idx);
+                return true;
+            }
+        }
+        self.hovered = None;
+        true
     }
 
     pub fn insert_char(&mut self, c: char) {
@@ -124,6 +160,31 @@ impl FuzzyFinderComponent {
             .map(|(p, _)| p.as_path())
     }
 
+    /// Given a click at (x, y), check if it hits a result item.
+    /// Returns true and sets `selected` if a result was clicked.
+    pub fn click_at(&mut self, x: u16, y: u16, area: Rect) -> bool {
+        let popup_area = centered_rect(60, 60, area);
+        let block = ratatui::widgets::Block::default()
+            .borders(ratatui::widgets::Borders::ALL);
+        let inner = block.inner(popup_area);
+
+        if x < inner.x || x >= inner.x + inner.width || y < inner.y || y >= inner.y + inner.height
+        {
+            return false;
+        }
+
+        let rel_y = (y - inner.y) as usize;
+        // row 0 = input, row 1 = separator, row 2+ = results
+        if rel_y >= 2 {
+            let idx = rel_y - 2;
+            if idx < self.filtered.len() {
+                self.selected = idx;
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let popup_area = centered_rect(60, 60, area);
 
@@ -169,6 +230,7 @@ impl FuzzyFinderComponent {
 
         for (idx, (path, _score)) in self.filtered.iter().enumerate().take(max_results) {
             let is_selected = idx == self.selected;
+            let is_hovered = self.hovered == Some(idx) && !is_selected;
             let relative = path
                 .strip_prefix(&self.root)
                 .ok()
@@ -183,12 +245,16 @@ impl FuzzyFinderComponent {
 
             let bg = if is_selected {
                 theme.ui.file_tree_selected_bg
+            } else if is_hovered {
+                theme.ui.selection
             } else {
                 theme.ui.popup_bg
             };
 
             let fg = if is_selected {
                 theme.ui.file_tree_selected_fg
+            } else if is_hovered {
+                theme.ui.accent
             } else {
                 theme.ui.foreground
             };

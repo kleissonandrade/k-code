@@ -466,31 +466,69 @@ impl App {
                 let x = mouse.column;
                 let y = mouse.row;
 
-                // Git panel tab click (overlay - check first)
+                let ab_width = crate::layout::ACTIVITY_BAR_WIDTH;
+
+                // Activity bar click - ALWAYS check first (must work from any mode)
+                if x < ab_width {
+                    let ab_area = Rect::new(0, 0, ab_width, self.last_area.height.saturating_sub(1));
+                    if let Some(item) = self.activity_bar.item_at_y(x, y, ab_area) {
+                        // Close any active overlay first
+                        match self.mode {
+                            EditorMode::FuzzyFinder => { self.fuzzy_finder.reset(); }
+                            EditorMode::GitPanel => { self.git_panel.reset(); }
+                            EditorMode::Tutorial => { self.tutorial.reset(); }
+                            _ => {}
+                        }
+                        match item {
+                            ActivityItem::FileTree => {
+                                self.activity_bar.active = ActivityItem::FileTree;
+                                self.mode = EditorMode::Normal;
+                                return Action::ToggleFileTree;
+                            }
+                            ActivityItem::Git => {
+                                self.activity_bar.active = ActivityItem::Git;
+                                self.mode = EditorMode::Normal;
+                                return Action::EnterMode(EditorMode::GitPanel);
+                            }
+                            ActivityItem::Search => {
+                                self.activity_bar.active = ActivityItem::Search;
+                                self.mode = EditorMode::Normal;
+                                return Action::EnterMode(EditorMode::FuzzyFinder);
+                            }
+                        }
+                    }
+                }
+
+                // Fuzzy finder click (overlay)
+                if self.mode == EditorMode::FuzzyFinder {
+                    if self.fuzzy_finder.click_at(x, y, self.last_area) {
+                        if let Some(path) = self.fuzzy_finder.selected_path() {
+                            let path = path.to_path_buf();
+                            self.fuzzy_finder.reset();
+                            self.mode = EditorMode::Normal;
+                            self.activity_bar.active = ActivityItem::FileTree;
+                            return Action::OpenFile(path);
+                        }
+                    }
+                    return Action::Noop;
+                }
+
+                // Git panel tab click (overlay)
                 if self.mode == EditorMode::GitPanel && !self.git_panel.editing_commit {
                     let popup_area = crate::layout::centered_rect(75, 75, self.last_area);
                     let block = ratatui::widgets::Block::default()
                         .borders(ratatui::widgets::Borders::ALL);
                     let inner = block.inner(popup_area);
                     let tabs_area = Rect::new(inner.x, inner.y, inner.width, 1);
-                    tracing::debug!(
-                        "Git panel click: mouse=({},{}) last_area={:?} popup={:?} inner={:?} tabs_area={:?}",
-                        x, y, self.last_area, popup_area, inner, tabs_area
-                    );
                     if let Some(tab) = self.git_panel.tab_at_position(x, y, tabs_area) {
-                        tracing::debug!("Tab matched: {:?}", tab);
                         if tab != self.git_panel.active_tab {
                             self.git_panel.active_tab = tab;
                             self.git_panel.selected = 0;
                             self.refresh_git_tab();
                         }
                         return Action::Noop;
-                    } else {
-                        tracing::debug!("No tab matched");
                     }
                 }
-
-                let ab_width = crate::layout::ACTIVITY_BAR_WIDTH;
                 let tree_width = if self.file_tree.visible {
                     self.config.file_tree.width
                 } else {
@@ -498,29 +536,7 @@ impl App {
                 };
                 let tree_end = ab_width + tree_width;
 
-                if x < ab_width {
-                    // Activity bar click
-                    let ab_area = Rect::new(0, 0, ab_width, self.last_area.height.saturating_sub(1));
-                    if let Some(item) = self.activity_bar.item_at_y(x, y, ab_area) {
-                        match item {
-                            ActivityItem::FileTree => {
-                                self.activity_bar.active = ActivityItem::FileTree;
-                                if self.mode != EditorMode::Normal {
-                                    self.mode = EditorMode::Normal;
-                                }
-                                return Action::ToggleFileTree;
-                            }
-                            ActivityItem::Git => {
-                                self.activity_bar.active = ActivityItem::Git;
-                                return Action::EnterMode(EditorMode::GitPanel);
-                            }
-                            ActivityItem::Search => {
-                                self.activity_bar.active = ActivityItem::Search;
-                                return Action::EnterMode(EditorMode::FuzzyFinder);
-                            }
-                        }
-                    }
-                } else if x < tree_end && self.file_tree.visible {
+                if x < tree_end && self.file_tree.visible {
                     // File tree click
                     self.focus = FocusTarget::FileTree;
                     let row = y as usize;
@@ -539,14 +555,28 @@ impl App {
                     }
                 } else if y == 0 && x >= tree_end {
                     // Tab bar click
-                    if let Some(tab_idx) = TabBarComponent::tab_at_x(
+                    if let Some((tab_idx, is_close)) = TabBarComponent::hit_test(
                         &self.documents,
                         x,
                         tree_end,
                     ) {
                         if tab_idx < self.documents.len() {
-                            self.active_doc = tab_idx;
-                            self.editor.viewport.top_line = 0;
+                            if is_close {
+                                // Close tab
+                                if self.documents.len() > 1 {
+                                    self.documents.remove(tab_idx);
+                                    if self.active_doc >= self.documents.len() {
+                                        self.active_doc = self.documents.len() - 1;
+                                    } else if self.active_doc > tab_idx {
+                                        self.active_doc -= 1;
+                                    }
+                                    self.editor.viewport.top_line = 0;
+                                }
+                            } else {
+                                // Switch to tab
+                                self.active_doc = tab_idx;
+                                self.editor.viewport.top_line = 0;
+                            }
                             self.focus = FocusTarget::Editor;
                         }
                     }
@@ -571,6 +601,12 @@ impl App {
                     Action::MoveCursor(CursorMotion::Down)
                 }
             }
+            MouseEventKind::Moved => {
+                if self.mode == EditorMode::FuzzyFinder {
+                    self.fuzzy_finder.hover_at(mouse.column, mouse.row, self.last_area);
+                }
+                Action::Noop
+            }
             _ => Action::Noop,
         }
     }
@@ -582,8 +618,11 @@ impl App {
                 self.mode = mode;
                 match mode {
                     EditorMode::FuzzyFinder => {
-                        self.fuzzy_finder.reset();
                         self.fuzzy_finder.load_files();
+                        self.fuzzy_finder.input.clear();
+                        self.fuzzy_finder.cursor_pos = 0;
+                        self.fuzzy_finder.selected = 0;
+                        self.fuzzy_finder.hovered = None;
                     }
                     EditorMode::GitPanel => {
                         self.refresh_git_tab();
