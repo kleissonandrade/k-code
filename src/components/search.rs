@@ -1,7 +1,7 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::theme::Theme;
@@ -44,52 +44,86 @@ impl SearchComponent {
 
     pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let match_info = if self.match_count > 0 {
-            format!(" [{}/{}]", self.current_match + 1, self.match_count)
+            format!(" {}/{} ", self.current_match + 1, self.match_count)
         } else if !self.input.is_empty() {
-            " [No matches]".to_string()
+            " No matches ".to_string()
         } else {
             String::new()
         };
 
-        let spans = vec![
-            Span::styled(
-                " / ",
+        // icon(3) + input + match_info + padding
+        let content_width = 3 + self.input.len() + match_info.len() + 1;
+        let box_width = (content_width as u16).max(30).min(area.width.saturating_sub(2));
+        let box_height: u16 = 3; // border + content + border
+
+        // Position: top-right corner of the editor area
+        let box_x = area.x + area.width.saturating_sub(box_width + 1);
+        let box_y = area.y;
+
+        let popup_area = Rect::new(box_x, box_y, box_width, box_height);
+
+        frame.render_widget(Clear, popup_area);
+
+        let block = Block::default()
+            .title(" Find (Ctrl+F) ")
+            .title_style(
                 Style::default()
                     .fg(theme.ui.accent)
-                    .bg(theme.ui.status_bar_bg)
                     .add_modifier(Modifier::BOLD),
+            )
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.ui.popup_border))
+            .style(Style::default().bg(theme.ui.popup_bg));
+
+        let inner = block.inner(popup_area);
+        frame.render_widget(block, popup_area);
+
+        if inner.width == 0 || inner.height == 0 {
+            return;
+        }
+
+        let mut spans = vec![
+            Span::styled(
+                " \u{f002} ",
+                Style::default()
+                    .fg(theme.ui.accent)
+                    .bg(theme.ui.popup_bg),
             ),
             Span::styled(
                 &self.input,
                 Style::default()
                     .fg(theme.ui.foreground)
-                    .bg(theme.ui.status_bar_bg),
-            ),
-            Span::styled(
-                &match_info,
-                Style::default()
-                    .fg(theme.ui.line_number)
-                    .bg(theme.ui.status_bar_bg),
+                    .bg(theme.ui.popup_bg),
             ),
         ];
 
-        let content_width: usize = spans.iter().map(|s| s.content.len()).sum();
-        let remaining = (area.width as usize).saturating_sub(content_width);
+        if !match_info.is_empty() {
+            spans.push(Span::styled(
+                &match_info,
+                Style::default()
+                    .fg(theme.ui.line_number)
+                    .bg(theme.ui.popup_bg),
+            ));
+        }
 
-        let mut all_spans = spans;
-        all_spans.push(Span::styled(
-            " ".repeat(remaining),
-            Style::default().bg(theme.ui.status_bar_bg),
-        ));
+        // Fill remaining space
+        let used: usize = spans.iter().map(|s| s.content.len()).sum();
+        let remaining = (inner.width as usize).saturating_sub(used);
+        if remaining > 0 {
+            spans.push(Span::styled(
+                " ".repeat(remaining),
+                Style::default().bg(theme.ui.popup_bg),
+            ));
+        }
 
-        let line = Line::from(all_spans);
+        let line = Line::from(spans);
         let paragraph = Paragraph::new(vec![line]);
-        frame.render_widget(paragraph, area);
+        frame.render_widget(paragraph, inner);
 
-        // Set cursor position in search bar
-        let cursor_x = area.x + 3 + self.cursor_pos as u16;
-        let cursor_y = area.y;
-        if cursor_x < area.x + area.width {
+        // Set cursor position inside the input
+        let cursor_x = inner.x + 3 + self.cursor_pos as u16;
+        let cursor_y = inner.y;
+        if cursor_x < inner.x + inner.width {
             frame.set_cursor_position((cursor_x, cursor_y));
         }
     }

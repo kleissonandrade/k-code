@@ -387,11 +387,8 @@ impl App {
                 Action::EnterMode(EditorMode::Normal)
             }
             (KeyModifiers::NONE, KeyCode::Enter) => {
-                let query = self.search.input.clone();
-                if !query.is_empty() {
-                    let doc = &self.documents[self.active_doc];
-                    self.editor.search(&query, doc);
-                    self.search.match_count = self.editor.search_matches.len();
+                if !self.editor.search_matches.is_empty() {
+                    self.editor.next_match();
                     self.search.current_match = self.editor.current_match;
                     if let Some((line, col)) = self.editor.current_match_position() {
                         self.documents[self.active_doc].cursor.move_to(line, col);
@@ -400,25 +397,33 @@ impl App {
                         self.editor.ensure_cursor_visible(doc, scroll_padding);
                     }
                 }
-                Action::EnterMode(EditorMode::Normal)
+                Action::Noop
             }
             (KeyModifiers::NONE, KeyCode::Backspace) => {
                 self.search.delete_char();
-                let query = self.search.input.clone();
-                let doc = &self.documents[self.active_doc];
-                self.editor.search(&query, doc);
-                self.search.match_count = self.editor.search_matches.len();
+                self.run_live_search();
                 Action::Noop
             }
             (KeyModifiers::NONE, KeyCode::Char(c)) | (KeyModifiers::SHIFT, KeyCode::Char(c)) => {
                 self.search.insert_char(c);
-                let query = self.search.input.clone();
-                let doc = &self.documents[self.active_doc];
-                self.editor.search(&query, doc);
-                self.search.match_count = self.editor.search_matches.len();
+                self.run_live_search();
                 Action::Noop
             }
             _ => Action::Noop,
+        }
+    }
+
+    fn run_live_search(&mut self) {
+        let query = self.search.input.clone();
+        let doc = &self.documents[self.active_doc];
+        self.editor.search(&query, doc);
+        self.search.match_count = self.editor.search_matches.len();
+        self.search.current_match = self.editor.current_match;
+        if let Some((line, col)) = self.editor.current_match_position() {
+            self.documents[self.active_doc].cursor.move_to(line, col);
+            let scroll_padding = self.config.editor.scroll_padding;
+            let doc = &self.documents[self.active_doc];
+            self.editor.ensure_cursor_visible(doc, scroll_padding);
         }
     }
 
@@ -1314,9 +1319,6 @@ impl App {
             .render(frame, app_layout.editor, doc, mode, theme, &self.highlighter);
 
         match self.mode {
-            EditorMode::Search => {
-                self.search.render(frame, app_layout.status_bar, &self.theme);
-            }
             EditorMode::Command => {
                 self.command
                     .render(frame, app_layout.status_bar, &self.theme);
@@ -1332,6 +1334,11 @@ impl App {
                     &self.status_message,
                 );
             }
+        }
+
+        if self.mode == EditorMode::Search {
+            self.search
+                .render(frame, app_layout.editor, &self.theme);
         }
 
         if self.mode == EditorMode::FuzzyFinder {

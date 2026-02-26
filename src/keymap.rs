@@ -138,6 +138,9 @@ impl KeyMap {
             (KeyModifiers::CONTROL, KeyCode::Char('b')) => {
                 KeyResult::Action(Action::ToggleFileTree)
             }
+            (KeyModifiers::CONTROL, KeyCode::Char('f')) => {
+                KeyResult::Action(Action::EnterMode(EditorMode::Search))
+            }
             (KeyModifiers::CONTROL, KeyCode::Char('g')) => {
                 KeyResult::Action(Action::EnterMode(EditorMode::GitPanel))
             }
@@ -214,6 +217,9 @@ impl KeyMap {
             }
             (KeyModifiers::CONTROL, KeyCode::Char('s')) => KeyResult::Action(Action::SaveFile),
             (KeyModifiers::CONTROL, KeyCode::Char('t')) => KeyResult::Action(Action::NewFile),
+            (KeyModifiers::CONTROL, KeyCode::Char('f')) => {
+                KeyResult::Action(Action::EnterMode(EditorMode::Search))
+            }
             _ => KeyResult::Action(Action::Noop),
         }
     }

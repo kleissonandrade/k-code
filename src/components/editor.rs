@@ -229,6 +229,8 @@ impl EditorComponent {
             let num_str = format!("{:>width$} ", line_idx + 1, width = gutter_width as usize - 2);
             spans.push(Span::styled(num_str, num_style));
 
+            let mut content_spans: Vec<Span> = Vec::new();
+
             if is_diff {
                 // Diff coloring based on line prefix
                 let text = &line_texts[idx];
@@ -243,7 +245,7 @@ impl EditorComponent {
                 } else {
                     (theme.ui.foreground, theme.ui.background)
                 };
-                spans.push(Span::styled(text.clone(), Style::default().fg(fg).bg(bg)));
+                content_spans.push(Span::styled(text.clone(), Style::default().fg(fg).bg(bg)));
             } else {
                 // Syntax-highlighted content
                 if idx < highlighted.len() {
@@ -262,12 +264,28 @@ impl EditorComponent {
 
                         let text = hl_span.text.replace('\n', "");
                         if !text.is_empty() {
-                            spans.push(Span::styled(text, style));
+                            content_spans.push(Span::styled(text, style));
                         }
                     }
                 }
             }
 
+            // Apply search match highlighting
+            if let Some(ref query) = self.search_query {
+                if !self.search_matches.is_empty() {
+                    content_spans = apply_search_highlights(
+                        content_spans,
+                        line_idx,
+                        &self.search_matches,
+                        self.current_match,
+                        query.len(),
+                        theme.ui.search_match,
+                        theme.ui.search_current,
+                    );
+                }
+            }
+
+            spans.extend(content_spans);
             lines.push(Line::from(spans));
         }
 
@@ -305,4 +323,59 @@ impl Default for EditorComponent {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn apply_search_highlights<'a>(
+    content_spans: Vec<Span<'a>>,
+    line_idx: usize,
+    search_matches: &[(usize, usize)],
+    current_match_idx: usize,
+    query_len: usize,
+    match_bg: Color,
+    current_bg: Color,
+) -> Vec<Span<'a>> {
+    // Collect match ranges on this line
+    let mut ranges: Vec<(usize, usize, bool)> = Vec::new();
+    for (i, &(ml, mc)) in search_matches.iter().enumerate() {
+        if ml == line_idx {
+            ranges.push((mc, mc + query_len, i == current_match_idx));
+        }
+    }
+
+    if ranges.is_empty() {
+        return content_spans;
+    }
+
+    // Build flat char array with styles
+    let mut chars: Vec<(char, Style)> = Vec::new();
+    for span in &content_spans {
+        for ch in span.content.chars() {
+            chars.push((ch, span.style));
+        }
+    }
+
+    // Apply match highlight backgrounds
+    for &(start, end, is_current) in &ranges {
+        let bg = if is_current { current_bg } else { match_bg };
+        let end = end.min(chars.len());
+        for item in chars.iter_mut().take(end).skip(start) {
+            item.1 = item.1.bg(bg);
+        }
+    }
+
+    // Rebuild spans by grouping consecutive chars with same style
+    let mut result: Vec<Span> = Vec::new();
+    for (ch, style) in chars {
+        if let Some(last) = result.last_mut() {
+            if last.style == style {
+                let mut s = last.content.to_string();
+                s.push(ch);
+                *last = Span::styled(s, style);
+                continue;
+            }
+        }
+        result.push(Span::styled(ch.to_string(), style));
+    }
+
+    result
 }
