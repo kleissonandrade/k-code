@@ -48,7 +48,7 @@ impl FuzzyFinderComponent {
         self.all_files.clear();
         let walker = WalkBuilder::new(&self.root)
             .hidden(true)
-            .git_ignore(true)
+            .git_ignore(false)
             .build();
 
         for entry in walker.flatten() {
