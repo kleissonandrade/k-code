@@ -14,6 +14,7 @@ use crate::components::command_palette::{CommandAction, CommandPaletteComponent}
 use crate::components::editor::EditorComponent;
 use crate::components::file_tree::FileTreeComponent;
 use crate::components::fuzzy_finder::FuzzyFinderComponent;
+use crate::components::global_search::GlobalSearchComponent;
 use crate::components::git_panel::GitPanelComponent;
 use crate::components::popup::PopupComponent;
 use crate::components::search::SearchComponent;
@@ -57,6 +58,7 @@ pub struct App {
     pub search: SearchComponent,
     pub command: CommandPaletteComponent,
     pub git_panel: GitPanelComponent,
+    pub global_search: GlobalSearchComponent,
     pub tutorial: TutorialComponent,
     pub popup: PopupComponent,
     pub highlighter: Highlighter,
@@ -95,7 +97,8 @@ impl App {
             activity_bar: ActivityBarComponent::new(),
             editor: EditorComponent::new(),
             file_tree: FileTreeComponent::new(workspace_root.clone()),
-            fuzzy_finder: FuzzyFinderComponent::new(workspace_root),
+            fuzzy_finder: FuzzyFinderComponent::new(workspace_root.clone()),
+            global_search: GlobalSearchComponent::new(workspace_root),
             search: SearchComponent::new(),
             command: CommandPaletteComponent::new(),
             git_panel: GitPanelComponent::new(),
@@ -252,6 +255,7 @@ impl App {
             EditorMode::Command => return self.handle_command_key(key),
             EditorMode::Search => return self.handle_search_key(key),
             EditorMode::FuzzyFinder => return self.handle_fuzzy_key(key),
+            EditorMode::GlobalSearch => return self.handle_global_search_key(key),
             EditorMode::GitPanel => return self.handle_git_panel_key(key),
             _ => {}
         }
@@ -424,6 +428,55 @@ impl App {
             let scroll_padding = self.config.editor.scroll_padding;
             let doc = &self.documents[self.active_doc];
             self.editor.ensure_cursor_visible(doc, scroll_padding);
+        }
+    }
+
+    fn handle_global_search_key(&mut self, key: KeyEvent) -> Action {
+        match (key.modifiers, key.code) {
+            (KeyModifiers::NONE, KeyCode::Esc) => {
+                self.global_search.reset();
+                Action::EnterMode(EditorMode::Normal)
+            }
+            (KeyModifiers::NONE, KeyCode::Enter) => {
+                if let Some(result) = self.global_search.selected_result() {
+                    // Has results — open the selected file
+                    let path = result.path.clone();
+                    let line = result.matches.first().map(|&(l, _)| l).unwrap_or(0);
+                    self.global_search.reset();
+                    self.mode = EditorMode::Normal;
+                    self.focus = FocusTarget::Editor;
+                    self.open_file(path);
+                    self.documents[self.active_doc].cursor.move_to(line, 0);
+                    let scroll_padding = self.config.editor.scroll_padding;
+                    let doc = &self.documents[self.active_doc];
+                    self.editor.ensure_cursor_visible(doc, scroll_padding);
+                } else {
+                    // No results yet — trigger the search
+                    self.global_search.trigger_search();
+                }
+                Action::Noop
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('j')) | (KeyModifiers::NONE, KeyCode::Down) => {
+                self.global_search.move_down();
+                Action::Noop
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('k')) | (KeyModifiers::NONE, KeyCode::Up) => {
+                self.global_search.move_up();
+                Action::Noop
+            }
+            (KeyModifiers::NONE, KeyCode::Backspace) => {
+                self.global_search.delete_char();
+                Action::Noop
+            }
+            (KeyModifiers::NONE, KeyCode::Tab) => {
+                self.global_search.toggle_collapsed();
+                Action::Noop
+            }
+            (KeyModifiers::NONE, KeyCode::Char(c)) | (KeyModifiers::SHIFT, KeyCode::Char(c)) => {
+                self.global_search.insert_char(c);
+                Action::Noop
+            }
+            _ => Action::Noop,
         }
     }
 
@@ -625,6 +678,29 @@ impl App {
                     return Action::Noop;
                 }
 
+                // Global search click (overlay)
+                if self.mode == EditorMode::GlobalSearch {
+                    use crate::components::global_search::ClickResult;
+                    match self.global_search.click_at(x, y, self.last_area) {
+                        ClickResult::OpenFile => {
+                            if let Some(result) = self.global_search.selected_result() {
+                                let path = result.path.clone();
+                                let line = result.matches.first().map(|&(l, _)| l).unwrap_or(0);
+                                self.global_search.reset();
+                                self.mode = EditorMode::Normal;
+                                self.focus = FocusTarget::Editor;
+                                self.open_file(path);
+                                self.documents[self.active_doc].cursor.move_to(line, 0);
+                                let scroll_padding = self.config.editor.scroll_padding;
+                                let doc = &self.documents[self.active_doc];
+                                self.editor.ensure_cursor_visible(doc, scroll_padding);
+                            }
+                        }
+                        _ => {}
+                    }
+                    return Action::Noop;
+                }
+
                 // Git panel click (overlay)
                 if self.mode == EditorMode::GitPanel && !self.git_panel.editing_commit {
                     let popup_area = crate::layout::centered_rect(75, 75, self.last_area);
@@ -724,7 +800,14 @@ impl App {
                 Action::Noop
             }
             MouseEventKind::ScrollUp => {
-                if self.focus == FocusTarget::FileTree {
+                if self.mode == EditorMode::GlobalSearch {
+                    if self.global_search.is_in_preview(mouse.column, mouse.row) {
+                        self.global_search.preview_scroll_up(3);
+                    } else {
+                        self.global_search.move_up();
+                    }
+                    Action::Noop
+                } else if self.focus == FocusTarget::FileTree {
                     self.file_tree.move_up();
                     Action::Noop
                 } else {
@@ -732,7 +815,14 @@ impl App {
                 }
             }
             MouseEventKind::ScrollDown => {
-                if self.focus == FocusTarget::FileTree {
+                if self.mode == EditorMode::GlobalSearch {
+                    if self.global_search.is_in_preview(mouse.column, mouse.row) {
+                        self.global_search.preview_scroll_down(3);
+                    } else {
+                        self.global_search.move_down();
+                    }
+                    Action::Noop
+                } else if self.focus == FocusTarget::FileTree {
                     self.file_tree.move_down();
                     Action::Noop
                 } else {
@@ -742,6 +832,8 @@ impl App {
             MouseEventKind::Moved => {
                 if self.mode == EditorMode::FuzzyFinder {
                     self.fuzzy_finder.hover_at(mouse.column, mouse.row, self.last_area);
+                } else if self.mode == EditorMode::GlobalSearch {
+                    self.global_search.hover_at(mouse.column, mouse.row, self.last_area);
                 } else if self.mode == EditorMode::GitPanel
                     && self.git_panel.active_tab == crate::components::git_panel::GitTab::Diff
                 {
@@ -768,6 +860,9 @@ impl App {
                     }
                     EditorMode::GitPanel => {
                         self.refresh_git_tab();
+                    }
+                    EditorMode::GlobalSearch => {
+                        self.global_search.reset();
                     }
                     EditorMode::Tutorial => {
                         self.tutorial.reset();
@@ -1346,6 +1441,9 @@ impl App {
         }
         if self.mode == EditorMode::GitPanel {
             self.git_panel.render(frame, area, &self.theme);
+        }
+        if self.mode == EditorMode::GlobalSearch {
+            self.global_search.render(frame, area, &self.theme, &self.highlighter);
         }
         if self.mode == EditorMode::Tutorial {
             self.tutorial.render(frame, area, &self.theme);

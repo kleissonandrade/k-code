@@ -8,6 +8,7 @@ pub enum EditorMode {
     Search,
     FuzzyFinder,
     GitPanel,
+    GlobalSearch,
     Tutorial,
 }
 
@@ -22,6 +23,7 @@ impl EditorMode {
             Self::Search => "SEARCH",
             Self::FuzzyFinder => "FILES",
             Self::GitPanel => "GIT",
+            Self::GlobalSearch => "GSEARCH",
             Self::Tutorial => "HELP",
         }
     }

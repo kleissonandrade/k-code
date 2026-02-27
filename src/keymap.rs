@@ -29,6 +29,7 @@ impl KeyMap {
             EditorMode::Search => KeyResult::Unmatched(key),
             EditorMode::FuzzyFinder => KeyResult::Unmatched(key),
             EditorMode::GitPanel => KeyResult::Unmatched(key),
+            EditorMode::GlobalSearch => KeyResult::Unmatched(key),
             EditorMode::Tutorial => self.resolve_tutorial(key),
         }
     }
@@ -144,7 +145,6 @@ impl KeyMap {
             (KeyModifiers::CONTROL, KeyCode::Char('g')) => {
                 KeyResult::Action(Action::EnterMode(EditorMode::GitPanel))
             }
-
             // Tab/buffer navigation
             (KeyModifiers::NONE, KeyCode::Tab) => KeyResult::Action(Action::NextBuffer),
             (KeyModifiers::SHIFT, KeyCode::BackTab) => KeyResult::Action(Action::PrevBuffer),
@@ -183,6 +183,10 @@ impl KeyMap {
             // space+t -> switch theme
             (KeyCode::Char(' '), KeyCode::Char('t')) => {
                 KeyResult::Action(Action::SwitchTheme)
+            }
+            // space+f -> global search in files
+            (KeyCode::Char(' '), KeyCode::Char('f')) => {
+                KeyResult::Action(Action::EnterMode(EditorMode::GlobalSearch))
             }
             _ => KeyResult::Action(Action::Noop),
         }

@@ -6,6 +6,7 @@ pub mod fuzzy_finder;
 pub mod git_diff;
 pub mod git_log;
 pub mod git_panel;
+pub mod global_search;
 pub mod popup;
 pub mod search;
 pub mod status_bar;
