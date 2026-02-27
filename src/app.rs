@@ -20,6 +20,7 @@ use crate::components::popup::PopupComponent;
 use crate::components::search::SearchComponent;
 use crate::components::status_bar::StatusBarComponent;
 use crate::components::tab_bar::TabBarComponent;
+use crate::components::terminal_panel::{TerminalPanelComponent, TabClickResult};
 use crate::components::tutorial::TutorialComponent;
 use crate::config::AppConfig;
 use crate::event::Event;
@@ -32,6 +33,7 @@ use crate::theme::{self, Theme, ThemeName};
 pub enum FocusTarget {
     Editor,
     FileTree,
+    Terminal,
 }
 
 pub struct App {
@@ -62,6 +64,7 @@ pub struct App {
     pub tutorial: TutorialComponent,
     pub popup: PopupComponent,
     pub highlighter: Highlighter,
+    pub terminal_panel: TerminalPanelComponent,
 
     pub git_repo: Option<GitRepository>,
     pub current_branch: String,
@@ -98,6 +101,7 @@ impl App {
             editor: EditorComponent::new(),
             file_tree: FileTreeComponent::new(workspace_root.clone()),
             fuzzy_finder: FuzzyFinderComponent::new(workspace_root.clone()),
+            terminal_panel: TerminalPanelComponent::new(workspace_root.to_string_lossy().to_string()),
             global_search: GlobalSearchComponent::new(workspace_root),
             search: SearchComponent::new(),
             command: CommandPaletteComponent::new(),
@@ -244,6 +248,7 @@ impl App {
             Event::Resize(w, h) => Action::Resize(w, h),
             Event::Tick => {
                 self.poll_git_responses();
+                self.terminal_panel.poll_output();
                 Action::Tick
             }
             _ => Action::Noop,
@@ -260,6 +265,10 @@ impl App {
             _ => {}
         }
 
+        if self.focus == FocusTarget::Terminal {
+            return self.handle_terminal_key(key);
+        }
+
         if self.focus == FocusTarget::FileTree && self.mode == EditorMode::Normal {
             return self.handle_file_tree_key(key);
         }
@@ -269,6 +278,23 @@ impl App {
             KeyResult::Pending => Action::Noop,
             KeyResult::Unmatched(_) => Action::Noop,
         }
+    }
+
+    fn handle_terminal_key(&mut self, key: KeyEvent) -> Action {
+        // Escape from terminal focus back to editor
+        match (key.modifiers, key.code) {
+            (KeyModifiers::CONTROL, KeyCode::Char('`')) => {
+                self.focus = FocusTarget::Editor;
+                return Action::Noop;
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('n')) if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                return Action::NewTerminal;
+            }
+            _ => {}
+        }
+        // Forward everything else to PTY
+        self.terminal_panel.handle_key(key);
+        Action::Noop
     }
 
     fn handle_file_tree_key(&mut self, key: KeyEvent) -> Action {
@@ -660,6 +686,9 @@ impl App {
                                 self.mode = EditorMode::Normal;
                                 return Action::EnterMode(EditorMode::FuzzyFinder);
                             }
+                            ActivityItem::Terminal => {
+                                return Action::ToggleTerminal;
+                            }
                         }
                     }
                 }
@@ -779,16 +808,36 @@ impl App {
                         }
                     }
                 } else {
+                    // Check if click is in terminal panel area
+                    let term_h = if self.terminal_panel.visible {
+                        Some(self.terminal_panel.height)
+                    } else {
+                        None
+                    };
+                    let tmp_layout = layout::build_layout(
+                        self.last_area,
+                        self.file_tree.visible,
+                        self.config.file_tree.width,
+                        term_h,
+                    );
+                    if let Some(term_area) = tmp_layout.terminal_panel {
+                        if self.terminal_panel.is_in_area(x, y, term_area) {
+                            // Click on terminal tab bar (first row)
+                            if y == term_area.y {
+                                match self.terminal_panel.tab_click(x, term_area) {
+                                    TabClickResult::NewTerminal => {
+                                        return Action::NewTerminal;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            self.focus = FocusTarget::Terminal;
+                            return Action::Noop;
+                        }
+                    }
                     // Check revert button click on diff toolbar
                     let doc = &self.documents[self.active_doc];
-                    let editor_area = {
-                        let app_layout = layout::build_layout(
-                            self.last_area,
-                            self.file_tree.visible,
-                            self.config.file_tree.width,
-                        );
-                        app_layout.editor
-                    };
+                    let editor_area = tmp_layout.editor;
                     if let Some(btn) = self.editor.diff_revert_button_area(editor_area, doc) {
                         if x >= btn.x && x < btn.x + btn.width && y == btn.y {
                             self.revert_current_diff();
@@ -800,6 +849,10 @@ impl App {
                 Action::Noop
             }
             MouseEventKind::ScrollUp => {
+                if self.focus == FocusTarget::Terminal && self.terminal_panel.visible {
+                    self.terminal_panel.scroll_up();
+                    return Action::Noop;
+                }
                 if self.mode == EditorMode::GlobalSearch {
                     if self.global_search.is_in_preview(mouse.column, mouse.row) {
                         self.global_search.preview_scroll_up(3);
@@ -815,6 +868,10 @@ impl App {
                 }
             }
             MouseEventKind::ScrollDown => {
+                if self.focus == FocusTarget::Terminal && self.terminal_panel.visible {
+                    self.terminal_panel.scroll_down();
+                    return Action::Noop;
+                }
                 if self.mode == EditorMode::GlobalSearch {
                     if self.global_search.is_in_preview(mouse.column, mouse.row) {
                         self.global_search.preview_scroll_down(3);
@@ -1083,6 +1140,44 @@ impl App {
             }
             Action::Error(msg) => {
                 self.status_message = format!("Error: {}", msg);
+            }
+            Action::ToggleTerminal => {
+                if self.terminal_panel.visible {
+                    if self.focus == FocusTarget::Terminal {
+                        self.focus = FocusTarget::Editor;
+                    } else {
+                        self.focus = FocusTarget::Terminal;
+                    }
+                } else {
+                    self.terminal_panel.visible = true;
+                    if !self.terminal_panel.has_terminals() {
+                        let cols = if self.terminal_panel.last_cols > 0 { self.terminal_panel.last_cols } else { self.last_area.width.saturating_sub(crate::layout::ACTIVITY_BAR_WIDTH) };
+                        let rows = self.terminal_panel.height.saturating_sub(1);
+                        self.terminal_panel.spawn_terminal(cols, rows);
+                    }
+                    self.focus = FocusTarget::Terminal;
+                }
+            }
+            Action::NewTerminal => {
+                let cols = if self.terminal_panel.last_cols > 0 { self.terminal_panel.last_cols } else { self.last_area.width.saturating_sub(crate::layout::ACTIVITY_BAR_WIDTH) };
+                let rows = self.terminal_panel.height.saturating_sub(1);
+                self.terminal_panel.spawn_terminal(cols, rows);
+                self.focus = FocusTarget::Terminal;
+                if !self.terminal_panel.visible {
+                    self.terminal_panel.visible = true;
+                }
+            }
+            Action::CloseTerminal => {
+                self.terminal_panel.close_active();
+                if !self.terminal_panel.has_terminals() {
+                    self.focus = FocusTarget::Editor;
+                }
+            }
+            Action::NextTerminalTab => {
+                self.terminal_panel.next_tab();
+            }
+            Action::PrevTerminalTab => {
+                self.terminal_panel.prev_tab();
             }
             _ => {}
         }
@@ -1387,8 +1482,13 @@ impl App {
         self.sync_tree_to_active_doc();
         let area = frame.area();
         self.last_area = area;
+        let terminal_height = if self.terminal_panel.visible {
+            Some(self.terminal_panel.height)
+        } else {
+            None
+        };
         let app_layout =
-            layout::build_layout(area, self.file_tree.visible, self.config.file_tree.width);
+            layout::build_layout(area, self.file_tree.visible, self.config.file_tree.width, terminal_height);
 
         let line_count = self.documents[self.active_doc].line_count();
         self.editor.update_viewport_size(app_layout.editor, line_count);
@@ -1429,6 +1529,16 @@ impl App {
                     &self.status_message,
                 );
             }
+        }
+
+        if let Some(term_area) = app_layout.terminal_panel {
+            // Resize PTY only when dimensions change
+            let content_cols = term_area.width;
+            let content_rows = term_area.height.saturating_sub(1);
+            if content_cols > 0 && content_rows > 0 {
+                self.terminal_panel.resize_if_needed(content_cols, content_rows);
+            }
+            self.terminal_panel.render(frame, term_area, &self.theme);
         }
 
         if self.mode == EditorMode::Search {

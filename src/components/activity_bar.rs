@@ -11,6 +11,7 @@ pub enum ActivityItem {
     FileTree,
     Git,
     Search,
+    Terminal,
 }
 
 // Each icon block: 1 blank line + 1 icon line + 1 blank line = 3 lines per item
@@ -32,7 +33,7 @@ impl ActivityBarComponent {
             return None;
         }
         let rel_y = (y - area.y) as usize;
-        let items = [ActivityItem::FileTree, ActivityItem::Git, ActivityItem::Search];
+        let items = [ActivityItem::FileTree, ActivityItem::Git, ActivityItem::Search, ActivityItem::Terminal];
         for (idx, item) in items.iter().enumerate() {
             let start = idx * LINES_PER_ITEM;
             let end = start + LINES_PER_ITEM;
@@ -57,6 +58,7 @@ impl ActivityBarComponent {
             (ActivityItem::FileTree, "\u{f07c}"),  // nf-fa-folder_open (bigger)
             (ActivityItem::Git, "\u{f113}"),       // nf-fa-github_alt (bigger)
             (ActivityItem::Search, "\u{f50d}"),    // nf-md-magnify (bigger)
+            (ActivityItem::Terminal, "\u{f489}"), // nf-oct-terminal
         ];
 
         let blank_style = Style::default().bg(bg);

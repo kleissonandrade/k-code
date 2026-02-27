@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/k-git", "crates/k-syntax", "crates/k-buffer"]
+members = ["crates/k-git", "crates/k-syntax", "crates/k-buffer", "crates/k-terminal"]
 resolver = "2"
 
 [package]
@@ -11,6 +11,7 @@ edition = "2021"
 k-git = { path = "crates/k-git" }
 k-syntax = { path = "crates/k-syntax" }
 k-buffer = { path = "crates/k-buffer" }
+k-terminal = { path = "crates/k-terminal" }
 
 ratatui = { version = "0.29", features = ["crossterm"] }
 crossterm = { version = "0.28", features = ["event-stream"] }

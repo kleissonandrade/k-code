@@ -102,11 +102,22 @@ impl TutorialComponent {
                 ("Shift+Tab", "Switch to previous open file"),
             ]),
             ("\u{f002} SEARCH", vec![
-                ("/", "Open search bar"),
+                ("/", "Open search bar in current file"),
+                ("Ctrl+f", "Open search bar in current file"),
                 ("n", "Go to next search match"),
                 ("N", "Go to previous search match"),
+                ("Space+f", "Open global search across all files"),
                 ("Ctrl+p", "Open fuzzy file finder"),
                 ("Esc", "Close search / fuzzy finder"),
+            ]),
+            ("\u{f50d} GLOBAL SEARCH", vec![
+                ("Space+f", "Open global search across all files"),
+                ("\u{2191}/\u{2193}", "Navigate results list"),
+                ("Enter", "Open selected file"),
+                ("Tab", "Toggle collapse all match lines"),
+                ("Click \u{25b8}/\u{25be}", "Collapse/expand individual file matches"),
+                ("Scroll", "Scroll preview pane"),
+                ("Esc", "Close global search"),
             ]),
             ("\u{f1bb} FILE TREE", vec![
                 ("Ctrl+b", "Toggle file tree sidebar"),
@@ -128,11 +139,19 @@ impl TutorialComponent {
                 ("o", "Open action in browser (in Actions tab)"),
                 ("Esc", "Close Git panel"),
             ]),
+            ("\u{f489} TERMINAL", vec![
+                ("Space+j", "Toggle integrated terminal"),
+                ("Ctrl+`", "Toggle terminal / return focus to editor"),
+                ("Click +", "Open new terminal tab"),
+                ("Click tab", "Switch between terminal tabs"),
+                ("Scroll", "Scroll terminal history"),
+                ("", "All keys are forwarded to the shell when terminal is focused"),
+            ]),
             ("\u{e7a8} CODE INTELLIGENCE", vec![
                 ("gd", "Go to definition of symbol under cursor"),
             ]),
             ("\u{f53f} THEMES", vec![
-                ("Space+t", "Switch between Amethyst and Aureum themes"),
+                ("Space+t", "Cycle through available themes"),
                 (":theme", "Switch theme (command mode)"),
             ]),
             ("\u{f128} MODES", vec![

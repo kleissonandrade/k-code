@@ -3,6 +3,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::action::{Action, CursorMotion};
 use crate::mode::EditorMode;
 
+
 pub struct KeyMap {
     pending: Vec<KeyEvent>,
 }
@@ -145,6 +146,11 @@ impl KeyMap {
             (KeyModifiers::CONTROL, KeyCode::Char('g')) => {
                 KeyResult::Action(Action::EnterMode(EditorMode::GitPanel))
             }
+            // Terminal toggle
+            (KeyModifiers::CONTROL, KeyCode::Char('`')) => {
+                KeyResult::Action(Action::ToggleTerminal)
+            }
+
             // Tab/buffer navigation
             (KeyModifiers::NONE, KeyCode::Tab) => KeyResult::Action(Action::NextBuffer),
             (KeyModifiers::SHIFT, KeyCode::BackTab) => KeyResult::Action(Action::PrevBuffer),
@@ -188,6 +194,10 @@ impl KeyMap {
             (KeyCode::Char(' '), KeyCode::Char('f')) => {
                 KeyResult::Action(Action::EnterMode(EditorMode::GlobalSearch))
             }
+            // space+j -> toggle terminal
+            (KeyCode::Char(' '), KeyCode::Char('j')) => {
+                KeyResult::Action(Action::ToggleTerminal)
+            }
             _ => KeyResult::Action(Action::Noop),
         }
     }
@@ -223,6 +233,9 @@ impl KeyMap {
             (KeyModifiers::CONTROL, KeyCode::Char('t')) => KeyResult::Action(Action::NewFile),
             (KeyModifiers::CONTROL, KeyCode::Char('f')) => {
                 KeyResult::Action(Action::EnterMode(EditorMode::Search))
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('`')) => {
+                KeyResult::Action(Action::ToggleTerminal)
             }
             _ => KeyResult::Action(Action::Noop),
         }

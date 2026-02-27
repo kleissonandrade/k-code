@@ -1,0 +1,9 @@
+[package]
+name = "k-terminal"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+portable-pty = "0.8"
+vte = "0.13"
+unicode-width = "0.2"

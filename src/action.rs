@@ -78,6 +78,12 @@ pub enum Action {
 
     CommandExecute(String),
 
+    ToggleTerminal,
+    NewTerminal,
+    CloseTerminal,
+    NextTerminalTab,
+    PrevTerminalTab,
+
     StatusMessage(String),
     Error(String),
     Noop,
