@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::thread;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -66,6 +67,16 @@ pub enum DiffLineKind {
     Header,
 }
 
+#[derive(Debug, Clone)]
+pub struct WorktreeInfo {
+    pub name: String,
+    pub path: String,
+    pub branch: String,
+    pub is_main: bool,
+    pub status_count: usize,
+    pub commits_ahead: usize,
+}
+
 #[derive(Debug)]
 pub enum GitRequest {
     Status,
@@ -83,6 +94,10 @@ pub enum GitRequest {
     CurrentBranch,
     StageFile { path: String },
     StageAll,
+    WorktreeList,
+    WorktreeAdd { branch: String, base_branch: String },
+    WorktreeRemove { path: String, force: bool },
+    WorktreePrune,
     Shutdown,
 }
 
@@ -102,6 +117,10 @@ pub enum GitResponse {
     StashPopDone(Result<(), String>),
     CurrentBranch(String),
     StageDone(Result<(), String>),
+    Worktrees(Vec<WorktreeInfo>),
+    WorktreeAdded(Result<String, String>),
+    WorktreeRemoved(Result<(), String>),
+    WorktreePruned(Result<(), String>),
     Error(String),
 }
 
@@ -198,6 +217,22 @@ impl GitRepository {
         self.send(GitRequest::CurrentBranch);
     }
 
+    pub fn request_worktree_list(&self) {
+        self.send(GitRequest::WorktreeList);
+    }
+
+    pub fn request_worktree_add(&self, branch: String, base_branch: String) {
+        self.send(GitRequest::WorktreeAdd { branch, base_branch });
+    }
+
+    pub fn request_worktree_remove(&self, path: String, force: bool) {
+        self.send(GitRequest::WorktreeRemove { path, force });
+    }
+
+    pub fn request_worktree_prune(&self) {
+        self.send(GitRequest::WorktreePrune);
+    }
+
     pub fn shutdown(&self) {
         let _ = self.request_tx.send(GitRequest::Shutdown);
     }
@@ -240,6 +275,10 @@ fn git_worker(
             GitRequest::CurrentBranch => handle_current_branch(&repo),
             GitRequest::StageFile { path } => handle_stage_file(&repo, &path),
             GitRequest::StageAll => handle_stage_all(&repo),
+            GitRequest::WorktreeList => handle_worktree_list(&repo_path),
+            GitRequest::WorktreeAdd { branch, base_branch } => handle_worktree_add(&repo_path, &branch, &base_branch),
+            GitRequest::WorktreeRemove { path, force } => handle_worktree_remove(&repo_path, &path, force),
+            GitRequest::WorktreePrune => handle_worktree_prune(&repo_path),
         };
         if resp_tx.send(response).is_err() {
             break;
@@ -514,6 +553,227 @@ fn handle_stage_all(repo: &Repository) -> GitResponse {
     match result {
         Ok(()) => GitResponse::StageDone(Ok(())),
         Err(e) => GitResponse::StageDone(Err(e.to_string())),
+    }
+}
+
+fn handle_worktree_list(repo_path: &Path) -> GitResponse {
+    let output = Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(repo_path)
+        .output();
+
+    let output = match output {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+        Ok(o) => return GitResponse::Error(String::from_utf8_lossy(&o.stderr).to_string()),
+        Err(e) => return GitResponse::Error(e.to_string()),
+    };
+
+    let mut worktrees = Vec::new();
+    let mut current_path = String::new();
+    let mut current_branch = String::new();
+    let mut is_bare = false;
+    let repo_path_str = repo_path.to_string_lossy().to_string();
+
+    for line in output.lines() {
+        if line.starts_with("worktree ") {
+            if !current_path.is_empty() {
+                let is_main = current_path == repo_path_str;
+                let (status_count, commits_ahead) = worktree_details(&current_path);
+                let name = Path::new(&current_path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| current_path.clone());
+                worktrees.push(WorktreeInfo {
+                    name,
+                    path: current_path.clone(),
+                    branch: current_branch.clone(),
+                    is_main,
+                    status_count,
+                    commits_ahead,
+                });
+            }
+            current_path = line[9..].to_string();
+            current_branch.clear();
+            is_bare = false;
+        } else if line.starts_with("branch ") {
+            current_branch = line[7..].split('/').last().unwrap_or("").to_string();
+        } else if line == "bare" {
+            is_bare = true;
+        }
+    }
+
+    // Push last entry
+    if !current_path.is_empty() && !is_bare {
+        let is_main = current_path == repo_path_str;
+        let (status_count, commits_ahead) = worktree_details(&current_path);
+        let name = Path::new(&current_path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| current_path.clone());
+        worktrees.push(WorktreeInfo {
+            name,
+            path: current_path,
+            branch: current_branch,
+            is_main,
+            status_count,
+            commits_ahead,
+        });
+    }
+
+    GitResponse::Worktrees(worktrees)
+}
+
+fn worktree_details(worktree_path: &str) -> (usize, usize) {
+    let status_count = Command::new("git")
+        .args(["status", "-s"])
+        .current_dir(worktree_path)
+        .output()
+        .ok()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| !l.is_empty())
+                .count()
+        })
+        .unwrap_or(0);
+
+    let commits_ahead = Command::new("git")
+        .args(["rev-list", "--count", "@{u}..HEAD"])
+        .current_dir(worktree_path)
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                String::from_utf8_lossy(&o.stdout)
+                    .trim()
+                    .parse::<usize>()
+                    .ok()
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0);
+
+    (status_count, commits_ahead)
+}
+
+fn handle_worktree_add(repo_path: &Path, branch: &str, base_branch: &str) -> GitResponse {
+    let repo_name = repo_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let parent_dir = repo_path.parent().unwrap_or(repo_path);
+    let worktree_dir = parent_dir.join(format!("{}-{}", repo_name, branch));
+    let worktree_path = worktree_dir.to_string_lossy().to_string();
+
+    // Check if branch already exists
+    let branch_exists = Command::new("git")
+        .args(["show-ref", "--verify", "--quiet", &format!("refs/heads/{}", branch)])
+        .current_dir(repo_path)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    let output = if branch_exists {
+        Command::new("git")
+            .args(["worktree", "add", &worktree_path, branch])
+            .current_dir(repo_path)
+            .output()
+    } else {
+        Command::new("git")
+            .args(["worktree", "add", &worktree_path, "-b", branch, base_branch])
+            .current_dir(repo_path)
+            .output()
+    };
+
+    match output {
+        Ok(o) if o.status.success() => {
+            // Find the main worktree root to copy config files from.
+            // repo_path might itself be a worktree, so use git to find the real root.
+            let main_root = Command::new("git")
+                .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+                .current_dir(repo_path)
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .and_then(|o| {
+                    let git_common = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    // git-common-dir returns the .git dir; parent is the worktree root
+                    Path::new(&git_common).parent().map(|p| p.to_path_buf())
+                })
+                .unwrap_or_else(|| repo_path.to_path_buf());
+
+            // Copy untracked config files that tools depend on (e.g. .tool-versions, .node-version)
+            for file in &[".tool-versions", ".node-version", ".ruby-version", ".nvmrc"] {
+                let src = main_root.join(file);
+                if src.exists() {
+                    let _ = std::fs::copy(&src, worktree_dir.join(file));
+                }
+            }
+            GitResponse::WorktreeAdded(Ok(worktree_path))
+        }
+        Ok(o) => GitResponse::WorktreeAdded(Err(String::from_utf8_lossy(&o.stderr).trim().to_string())),
+        Err(e) => GitResponse::WorktreeAdded(Err(e.to_string())),
+    }
+}
+
+fn handle_worktree_remove(repo_path: &Path, path: &str, force: bool) -> GitResponse {
+    let mut args = vec!["worktree", "remove", path];
+    if force {
+        args.push("--force");
+    }
+
+    let output = Command::new("git")
+        .args(&args)
+        .current_dir(repo_path)
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => {
+            // Try to delete the branch too
+            let branch = Path::new(path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|name| {
+                    let repo_name = repo_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("");
+                    name.strip_prefix(&format!("{}-", repo_name))
+                })
+                .map(|s| s.to_string());
+
+            if let Some(branch) = branch {
+                let _ = Command::new("git")
+                    .args(["branch", "-D", &branch])
+                    .current_dir(repo_path)
+                    .output();
+            }
+
+            // Ensure the worktree directory is fully removed from disk
+            let wt_path = Path::new(path);
+            if wt_path.exists() {
+                let _ = std::fs::remove_dir_all(wt_path);
+            }
+
+            GitResponse::WorktreeRemoved(Ok(()))
+        }
+        Ok(o) => GitResponse::WorktreeRemoved(Err(String::from_utf8_lossy(&o.stderr).trim().to_string())),
+        Err(e) => GitResponse::WorktreeRemoved(Err(e.to_string())),
+    }
+}
+
+fn handle_worktree_prune(repo_path: &Path) -> GitResponse {
+    let output = Command::new("git")
+        .args(["worktree", "prune"])
+        .current_dir(repo_path)
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => GitResponse::WorktreePruned(Ok(())),
+        Ok(o) => GitResponse::WorktreePruned(Err(String::from_utf8_lossy(&o.stderr).trim().to_string())),
+        Err(e) => GitResponse::WorktreePruned(Err(e.to_string())),
     }
 }
 

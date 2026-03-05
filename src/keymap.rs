@@ -30,6 +30,7 @@ impl KeyMap {
             EditorMode::Search => KeyResult::Unmatched(key),
             EditorMode::FuzzyFinder => KeyResult::Unmatched(key),
             EditorMode::GitPanel => KeyResult::Unmatched(key),
+            EditorMode::WorktreePanel => KeyResult::Unmatched(key),
             EditorMode::GlobalSearch => KeyResult::Unmatched(key),
             EditorMode::Tutorial => self.resolve_tutorial(key),
         }
@@ -145,6 +146,9 @@ impl KeyMap {
             }
             (KeyModifiers::CONTROL, KeyCode::Char('g')) => {
                 KeyResult::Action(Action::EnterMode(EditorMode::GitPanel))
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('w')) => {
+                KeyResult::Action(Action::EnterMode(EditorMode::WorktreePanel))
             }
             // Terminal toggle
             (KeyModifiers::CONTROL, KeyCode::Char('`')) => {

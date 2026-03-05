@@ -74,6 +74,7 @@ impl CommandPaletteComponent {
                     Some(CommandAction::GitPanel)
                 }
             }
+            "worktree" | "wt" => Some(CommandAction::WorktreePanel),
             "help" | "tutorial" => Some(CommandAction::ShowTutorial),
             _ => {
                 if let Ok(line) = cmd.parse::<usize>() {
@@ -139,6 +140,7 @@ pub enum CommandAction {
     GitStash,
     GitStashPop,
     GitPanel,
+    WorktreePanel,
     ShowTutorial,
     GoToLine(usize),
 }

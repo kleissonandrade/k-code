@@ -13,3 +13,4 @@ pub mod status_bar;
 pub mod tab_bar;
 pub mod terminal_panel;
 pub mod tutorial;
+pub mod worktree_panel;

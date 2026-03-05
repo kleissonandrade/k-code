@@ -43,6 +43,15 @@ impl FileTreeComponent {
         tree
     }
 
+    pub fn set_root(&mut self, new_root: PathBuf) {
+        self.root = new_root.clone();
+        self.expanded.clear();
+        self.expanded.insert(new_root);
+        self.selected = 0;
+        self.scroll_offset = 0;
+        self.refresh();
+    }
+
     pub fn refresh(&mut self) {
         self.entries.clear();
         self.build_entries(&self.root.clone(), 0);
@@ -53,7 +62,7 @@ impl FileTreeComponent {
 
         let walker = WalkBuilder::new(dir)
             .max_depth(Some(1))
-            .hidden(true)
+            .hidden(false)
             .git_ignore(true)
             .sort_by_file_name(|a, b| {
                 let a_is_dir = a.to_str().map(|s| !s.contains('.')).unwrap_or(true);

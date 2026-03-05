@@ -71,6 +71,11 @@ impl GlobalSearchComponent {
         }
     }
 
+    pub fn set_root(&mut self, new_root: PathBuf) {
+        self.root = new_root;
+        self.results.clear();
+    }
+
     pub fn reset(&mut self) {
         self.input.clear();
         self.cursor_pos = 0;
@@ -218,7 +223,7 @@ impl GlobalSearchComponent {
         let query_lower = self.input.to_lowercase();
 
         let walker = WalkBuilder::new(&self.root)
-            .hidden(true)
+            .hidden(false)
             .git_ignore(true)
             .build();
 

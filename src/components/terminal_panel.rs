@@ -13,6 +13,7 @@ use crate::theme::Theme;
 struct TerminalInstance {
     id: usize,
     title: String,
+    working_dir: String,
     grid: TerminalGrid,
     pty: PtyHandle,
     scroll_offset: usize,
@@ -54,6 +55,32 @@ impl TerminalPanelComponent {
                 self.terminals.push(TerminalInstance {
                     id,
                     title,
+                    working_dir: self.workspace_root.clone(),
+                    grid,
+                    pty,
+                    scroll_offset: 0,
+                    exited: false,
+                });
+                self.active_terminal = self.terminals.len() - 1;
+            }
+            Err(_) => {}
+        }
+    }
+
+    pub fn spawn_terminal_in_dir(&mut self, cols: u16, rows: u16, dir: &str) {
+        let grid = TerminalGrid::new(cols, rows);
+        match PtyHandle::spawn(cols, rows, dir) {
+            Ok(pty) => {
+                let id = self.next_id;
+                self.next_id += 1;
+                let name = std::path::Path::new(dir)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| format!("Terminal {}", id));
+                self.terminals.push(TerminalInstance {
+                    id,
+                    title: name,
+                    working_dir: dir.to_string(),
                     grid,
                     pty,
                     scroll_offset: 0,
@@ -81,6 +108,20 @@ impl TerminalPanelComponent {
     pub fn decrease_height(&mut self) {
         self.height = self.height.saturating_sub(3).max(5);
         self.last_rows = 0; // force resize on next render
+    }
+
+    pub fn terminals_count(&self) -> usize {
+        self.terminals.len()
+    }
+
+    pub fn active_working_dir(&self) -> Option<&str> {
+        self.terminals.get(self.active_terminal).map(|t| t.working_dir.as_str())
+    }
+
+    pub fn write_to_active(&mut self, data: &[u8]) {
+        if let Some(term) = self.terminals.get_mut(self.active_terminal) {
+            term.pty.write_input(data);
+        }
     }
 
     pub fn close_active(&mut self) {
@@ -204,6 +245,10 @@ impl TerminalPanelComponent {
                 format!(" {} ", term.title),
                 style,
             ));
+            let close_style = Style::default()
+                .fg(theme.ui.line_number)
+                .bg(theme.ui.tab_inactive_bg);
+            tab_spans.push(Span::styled("✕", close_style));
             tab_spans.push(Span::styled("│", sep_style));
         }
 
@@ -345,11 +390,25 @@ impl TerminalPanelComponent {
         let mut pos = 1; // skip first separator char
         for (idx, term) in self.terminals.iter().enumerate() {
             let tab_width = term.title.len() + 2; // " title "
+            let close_pos = pos + tab_width; // "✕" is right after the title
+            if rel_x == close_pos {
+                // Close this specific terminal
+                self.terminals.remove(idx);
+                if self.terminals.is_empty() {
+                    self.visible = false;
+                    self.active_terminal = 0;
+                } else if self.active_terminal >= self.terminals.len() {
+                    self.active_terminal = self.terminals.len() - 1;
+                } else if self.active_terminal > idx {
+                    self.active_terminal -= 1;
+                }
+                return TabClickResult::Closed;
+            }
             if rel_x >= pos && rel_x < pos + tab_width {
                 self.active_terminal = idx;
                 return TabClickResult::Switched;
             }
-            pos += tab_width + 1; // +1 for separator
+            pos += tab_width + 1 + 1; // +1 for "✕", +1 for separator "│"
         }
         // Check + (new terminal) button
         if rel_x >= pos && rel_x < pos + 3 {
@@ -364,6 +423,7 @@ pub enum TabClickResult {
     Switched,
     NewTerminal,
     Resized,
+    Closed,
 }
 
 fn key_to_bytes(key: KeyEvent, app_cursor: bool) -> Option<Vec<u8>> {

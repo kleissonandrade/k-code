@@ -17,6 +17,7 @@ pub enum GitTab {
     Stash,
     Log,
     Actions,
+    PRs,
 }
 
 impl GitTab {
@@ -27,18 +28,20 @@ impl GitTab {
             Self::Branches => Self::Stash,
             Self::Stash => Self::Log,
             Self::Log => Self::Actions,
-            Self::Actions => Self::Status,
+            Self::Actions => Self::PRs,
+            Self::PRs => Self::Status,
         }
     }
 
     pub fn prev(&self) -> Self {
         match self {
-            Self::Status => Self::Actions,
+            Self::Status => Self::PRs,
             Self::Diff => Self::Status,
             Self::Branches => Self::Diff,
             Self::Stash => Self::Branches,
             Self::Log => Self::Stash,
             Self::Actions => Self::Log,
+            Self::PRs => Self::Actions,
         }
     }
 }
@@ -79,6 +82,42 @@ impl ActionStatus {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct PullRequest {
+    pub number: u64,
+    pub title: String,
+    pub author: String,
+    pub branch: String,
+    pub base: String,
+    pub date: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrFilter {
+    Open,
+    ReviewRequested,
+    Reviewed,
+}
+
+impl PrFilter {
+    pub fn cycle(&self) -> Self {
+        match self {
+            Self::Open => Self::ReviewRequested,
+            Self::ReviewRequested => Self::Reviewed,
+            Self::Reviewed => Self::Open,
+        }
+    }
+
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Open => "Open",
+            Self::ReviewRequested => "Review Requested",
+            Self::Reviewed => "Reviewed",
+        }
+    }
+}
+
 pub struct GitPanelComponent {
     pub active_tab: GitTab,
     pub status_entries: Vec<StatusEntry>,
@@ -90,6 +129,10 @@ pub struct GitPanelComponent {
     pub action_runs: Vec<ActionRun>,
     pub actions_loading: bool,
     pub actions_error: Option<String>,
+    pub pull_requests: Vec<PullRequest>,
+    pub prs_loading: bool,
+    pub prs_error: Option<String>,
+    pub pr_filter: PrFilter,
     pub selected: usize,
     pub commit_input: String,
     pub editing_commit: bool,
@@ -117,6 +160,10 @@ impl GitPanelComponent {
             action_runs: Vec::new(),
             actions_loading: false,
             actions_error: None,
+            pull_requests: Vec::new(),
+            prs_loading: false,
+            prs_error: None,
+            pr_filter: PrFilter::Open,
             selected: 0,
             commit_input: String::new(),
             editing_commit: false,
@@ -129,6 +176,7 @@ impl GitPanelComponent {
         self.commit_input.clear();
         self.editing_commit = false;
         self.message.clear();
+        self.pr_filter = PrFilter::Open;
     }
 
     pub fn next_tab(&mut self) {
@@ -150,7 +198,7 @@ impl GitPanelComponent {
         let rel_x = (x - tabs_area.x) as usize;
         // Tabs widget renders: " Title │ Title │ Title "
         // Each tab has 1 padding left + title + 1 padding right, then "│" divider (3 bytes but 1 col)
-        let tab_titles = ["Status", "Diff", "Branches", "Stash", "Log", "Actions"];
+        let tab_titles = ["Status", "Diff", "Branches", "Stash", "Log", "Actions", "PRs"];
         let mut pos = 0usize;
         for (idx, title) in tab_titles.iter().enumerate() {
             let tab_width = 1 + title.len() + 1; // " Title "
@@ -162,6 +210,7 @@ impl GitPanelComponent {
                     3 => GitTab::Stash,
                     4 => GitTab::Log,
                     5 => GitTab::Actions,
+                    6 => GitTab::PRs,
                     _ => return None,
                 });
             }
@@ -191,6 +240,7 @@ impl GitPanelComponent {
             GitTab::Stash => self.stashes.len(),
             GitTab::Log => self.log_entries.len(),
             GitTab::Actions => self.action_runs.len(),
+            GitTab::PRs => self.pull_requests.len(),
         };
         if self.selected + 1 < max {
             self.selected += 1;
@@ -228,6 +278,100 @@ impl GitPanelComponent {
             }
         }
         self.actions_loading = false;
+    }
+
+    pub fn load_pull_requests(&mut self) {
+        self.prs_loading = true;
+        self.prs_error = None;
+        self.pull_requests.clear();
+
+        let search_query = match self.pr_filter {
+            PrFilter::Open => None,
+            PrFilter::ReviewRequested => Some("review-requested:@me"),
+            PrFilter::Reviewed => Some("reviewed-by:@me"),
+        };
+
+        let mut cmd = std::process::Command::new("gh");
+        cmd.args([
+            "pr", "list", "--state", "open", "--limit", "50",
+            "--json", "number,title,author,headRefName,baseRefName,updatedAt,url",
+        ]);
+        if let Some(query) = search_query {
+            cmd.args(["--search", query]);
+        }
+
+        let output = cmd.output();
+
+        match output {
+            Ok(out) => {
+                if out.status.success() {
+                    let json_str = String::from_utf8_lossy(&out.stdout);
+                    self.parse_prs_json(&json_str);
+                } else {
+                    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                    if stderr.contains("not a git repository") || stderr.contains("could not determine") {
+                        self.prs_error = Some("Not a GitHub repository".to_string());
+                    } else if stderr.contains("gh auth") {
+                        self.prs_error = Some("Run 'gh auth login' to authenticate".to_string());
+                    } else {
+                        self.prs_error = Some(format!("gh error: {}", stderr.trim()));
+                    }
+                }
+            }
+            Err(_) => {
+                self.prs_error = Some("'gh' CLI not found. Install: https://cli.github.com".to_string());
+            }
+        }
+        self.prs_loading = false;
+    }
+
+    fn parse_prs_json(&mut self, json: &str) {
+        let json = json.trim();
+        if json == "[]" || json.is_empty() {
+            return;
+        }
+
+        let inner = json.trim_start_matches('[').trim_end_matches(']');
+        let objects: Vec<&str> = split_json_objects(inner);
+
+        for obj in objects {
+            let number = extract_json_field(obj, "number").parse::<u64>().unwrap_or(0);
+            let title = extract_json_field(obj, "title");
+            let branch = extract_json_field(obj, "headRefName");
+            let base = extract_json_field(obj, "baseRefName");
+            let updated = extract_json_field(obj, "updatedAt");
+            let url = extract_json_field(obj, "url");
+
+            // author comes as {"login":"username"} — extract login
+            let author = extract_nested_json_field(obj, "author", "login");
+
+            let date = format_relative_time(&updated);
+
+            self.pull_requests.push(PullRequest {
+                number,
+                title,
+                author,
+                branch,
+                base,
+                date,
+                url,
+            });
+        }
+    }
+
+    pub fn selected_pull_request(&self) -> Option<&PullRequest> {
+        self.pull_requests.get(self.selected)
+    }
+
+    pub fn open_selected_pr_url(&self) {
+        if self.active_tab != GitTab::PRs {
+            return;
+        }
+        if let Some(pr) = self.pull_requests.get(self.selected) {
+            if !pr.url.is_empty() {
+                let _ = open_url(&pr.url);
+            }
+        }
     }
 
     fn parse_actions_json(&mut self, json: &str) {
@@ -309,7 +453,7 @@ impl GitPanelComponent {
             .split(inner);
 
         // Tabs
-        let tab_titles = vec!["Status", "Diff", "Branches", "Stash", "Log", "Actions"];
+        let tab_titles = vec!["Status", "Diff", "Branches", "Stash", "Log", "Actions", "PRs"];
         let selected_idx = match self.active_tab {
             GitTab::Status => 0,
             GitTab::Diff => 1,
@@ -317,6 +461,7 @@ impl GitPanelComponent {
             GitTab::Stash => 3,
             GitTab::Log => 4,
             GitTab::Actions => 5,
+            GitTab::PRs => 6,
         };
 
         let tabs = Tabs::new(tab_titles)
@@ -346,6 +491,7 @@ impl GitPanelComponent {
             GitTab::Stash => self.render_stashes(frame, chunks[2], theme),
             GitTab::Log => self.render_log(frame, chunks[2], theme),
             GitTab::Actions => self.render_actions(frame, chunks[2], theme),
+            GitTab::PRs => self.render_prs(frame, chunks[2], theme),
         }
 
         // Footer help
@@ -356,6 +502,7 @@ impl GitPanelComponent {
             GitTab::Stash => "Tab: switch │ s: stash │ Enter: pop │ Esc: close",
             GitTab::Log => "Tab: switch │ j/k: navigate │ Esc: close",
             GitTab::Actions => "Tab: switch │ r: refresh │ o: open in browser │ j/k: navigate │ Esc: close",
+            GitTab::PRs => "Tab: switch │ f/1-3: filter │ Enter: view diff │ o: open in browser │ r: refresh │ Esc: close",
         };
         let footer = Paragraph::new(Line::from(Span::styled(
             help_text,
@@ -897,6 +1044,122 @@ impl GitPanelComponent {
         frame.render_widget(list, area);
     }
 
+    fn render_prs(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        // Filter bar
+        let filter_area = Rect::new(area.x, area.y, area.width, 1);
+        let list_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
+
+        let filters = [PrFilter::Open, PrFilter::ReviewRequested, PrFilter::Reviewed];
+        let filter_spans: Vec<Span> = filters
+            .iter()
+            .enumerate()
+            .flat_map(|(i, f)| {
+                let is_active = *f == self.pr_filter;
+                let label = if is_active {
+                    format!(" [{}] ", f.label())
+                } else {
+                    format!("  {}  ", f.label())
+                };
+                let style = if is_active {
+                    Style::default()
+                        .fg(theme.ui.accent)
+                        .bg(theme.ui.popup_bg)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                        .fg(theme.ui.line_number)
+                        .bg(theme.ui.popup_bg)
+                };
+                let mut spans = vec![Span::styled(label, style)];
+                if i < filters.len() - 1 {
+                    spans.push(Span::styled(
+                        "│",
+                        Style::default().fg(theme.ui.border).bg(theme.ui.popup_bg),
+                    ));
+                }
+                spans
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(Line::from(filter_spans)), filter_area);
+
+        if self.prs_loading {
+            let msg = Paragraph::new(Line::from(Span::styled(
+                " \u{f110} Loading Pull Requests...",
+                Style::default()
+                    .fg(theme.ui.accent)
+                    .bg(theme.ui.popup_bg),
+            )));
+            frame.render_widget(msg, list_area);
+            return;
+        }
+
+        if let Some(ref err) = self.prs_error {
+            let msg = Paragraph::new(Line::from(Span::styled(
+                format!(" \u{f071} {}", err),
+                Style::default()
+                    .fg(theme.git.deleted)
+                    .bg(theme.ui.popup_bg),
+            )));
+            frame.render_widget(msg, list_area);
+            return;
+        }
+
+        if self.pull_requests.is_empty() {
+            let empty_msg = match self.pr_filter {
+                PrFilter::Open => " No open pull requests",
+                PrFilter::ReviewRequested => " No pull requests awaiting your review",
+                PrFilter::Reviewed => " No pull requests reviewed by you",
+            };
+            let msg = Paragraph::new(Line::from(Span::styled(
+                empty_msg,
+                Style::default()
+                    .fg(theme.ui.line_number)
+                    .bg(theme.ui.popup_bg),
+            )));
+            frame.render_widget(msg, list_area);
+            return;
+        }
+
+        let items: Vec<ListItem> = self
+            .pull_requests
+            .iter()
+            .enumerate()
+            .map(|(idx, pr)| {
+                let is_selected = idx == self.selected;
+                let bg = if is_selected {
+                    theme.ui.file_tree_selected_bg
+                } else {
+                    theme.ui.popup_bg
+                };
+
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!(" #{} ", pr.number),
+                        Style::default()
+                            .fg(theme.ui.accent)
+                            .bg(bg)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        &pr.title,
+                        Style::default().fg(theme.ui.foreground).bg(bg),
+                    ),
+                    Span::styled(
+                        format!("  {} ", pr.author),
+                        Style::default().fg(theme.git.branch).bg(bg),
+                    ),
+                    Span::styled(
+                        format!(" {} ", pr.date),
+                        Style::default().fg(theme.ui.line_number).bg(bg),
+                    ),
+                ]))
+            })
+            .collect();
+
+        let list = List::new(items).style(Style::default().bg(theme.ui.popup_bg));
+        frame.render_widget(list, list_area);
+    }
+
     pub fn open_selected_action_url(&self) {
         if self.active_tab != GitTab::Actions {
             return;
@@ -977,6 +1240,21 @@ fn extract_json_field<'a>(json: &'a str, field: &str) -> String {
             // Number or other
             let end = rest.find(|c: char| c == ',' || c == '}').unwrap_or(rest.len());
             return rest[..end].trim().to_string();
+        }
+    }
+    String::new()
+}
+
+fn extract_nested_json_field(json: &str, parent: &str, child: &str) -> String {
+    let key = format!("\"{}\":", parent);
+    if let Some(pos) = json.find(&key) {
+        let rest = &json[pos + key.len()..];
+        // Find the nested object
+        if let Some(obj_start) = rest.find('{') {
+            if let Some(obj_end) = rest[obj_start..].find('}') {
+                let nested = &rest[obj_start..obj_start + obj_end + 1];
+                return extract_json_field(nested, child);
+            }
         }
     }
     String::new()

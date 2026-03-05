@@ -73,6 +73,12 @@ pub enum Action {
     GitStageAll,
     GitRefresh,
 
+    WorktreeList,
+    WorktreeCreate { branch: String, base: String },
+    WorktreeRemove { path: String },
+    WorktreePrune,
+    WorktreeOpenTerminal(String),
+
     SwitchTheme,
     ShowTutorial,
 

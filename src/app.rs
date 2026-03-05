@@ -22,6 +22,7 @@ use crate::components::status_bar::StatusBarComponent;
 use crate::components::tab_bar::TabBarComponent;
 use crate::components::terminal_panel::{TerminalPanelComponent, TabClickResult};
 use crate::components::tutorial::TutorialComponent;
+use crate::components::worktree_panel::WorktreePanelComponent;
 use crate::config::AppConfig;
 use crate::event::Event;
 use crate::keymap::{KeyMap, KeyResult};
@@ -66,6 +67,8 @@ pub struct App {
     pub highlighter: Highlighter,
     pub terminal_panel: TerminalPanelComponent,
 
+    pub worktree_panel: WorktreePanelComponent,
+
     pub git_repo: Option<GitRepository>,
     pub current_branch: String,
     pub last_area: Rect,
@@ -106,6 +109,7 @@ impl App {
             search: SearchComponent::new(),
             command: CommandPaletteComponent::new(),
             git_panel: GitPanelComponent::new(),
+            worktree_panel: WorktreePanelComponent::new(),
             tutorial: TutorialComponent::new(),
             popup: PopupComponent::new(),
             highlighter: Highlighter::new(),
@@ -241,6 +245,48 @@ impl App {
         self.activity_bar.active = ActivityItem::FileTree;
     }
 
+    fn open_diff_for_pr(&mut self) {
+        let pr = match self.git_panel.selected_pull_request() {
+            Some(pr) => pr,
+            None => return,
+        };
+
+        let number = pr.number;
+        let title = pr.title.clone();
+
+        let output = std::process::Command::new("gh")
+            .args(["pr", "diff", &number.to_string()])
+            .current_dir(&self.workspace_root)
+            .output();
+
+        let diff_text = match output {
+            Ok(out) => {
+                if out.status.success() {
+                    let text = String::from_utf8_lossy(&out.stdout).to_string();
+                    if text.is_empty() {
+                        "No diff available for this PR".to_string()
+                    } else {
+                        text
+                    }
+                } else {
+                    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                    format!("Failed to get PR diff: {}", stderr.trim())
+                }
+            }
+            Err(_) => "'gh' CLI not found".to_string(),
+        };
+
+        let tab_name = format!("PR #{}: {}", number, title);
+        let doc = Document::from_string(&diff_text, &tab_name, Some("diff".to_string()));
+        self.documents.push(doc);
+        self.active_doc = self.documents.len() - 1;
+        self.editor.viewport.top_line = 0;
+        self.focus = FocusTarget::Editor;
+        self.git_panel.reset();
+        self.mode = EditorMode::Normal;
+        self.activity_bar.active = ActivityItem::FileTree;
+    }
+
     pub fn handle_event(&mut self, event: Event) -> Action {
         match event {
             Event::Key(key) => self.handle_key(key),
@@ -262,6 +308,7 @@ impl App {
             EditorMode::FuzzyFinder => return self.handle_fuzzy_key(key),
             EditorMode::GlobalSearch => return self.handle_global_search_key(key),
             EditorMode::GitPanel => return self.handle_git_panel_key(key),
+            EditorMode::WorktreePanel => return self.handle_worktree_panel_key(key),
             _ => {}
         }
 
@@ -340,6 +387,9 @@ impl App {
             (KeyModifiers::CONTROL, KeyCode::Char('g')) => {
                 Action::EnterMode(EditorMode::GitPanel)
             }
+            (KeyModifiers::CONTROL, KeyCode::Char('w')) => {
+                Action::EnterMode(EditorMode::WorktreePanel)
+            }
             (KeyModifiers::NONE, KeyCode::Char('?')) => Action::ShowTutorial,
             _ => Action::Noop,
         }
@@ -386,6 +436,7 @@ impl App {
             CommandAction::OpenFile(path) => Action::OpenFile(PathBuf::from(path)),
             CommandAction::SwitchTheme => Action::SwitchTheme,
             CommandAction::GitPanel => Action::EnterMode(EditorMode::GitPanel),
+            CommandAction::WorktreePanel => Action::EnterMode(EditorMode::WorktreePanel),
             CommandAction::GitCommit => {
                 self.mode = EditorMode::GitPanel;
                 self.git_panel.editing_commit = true;
@@ -615,13 +666,41 @@ impl App {
                 (KeyModifiers::NONE, KeyCode::Char('r')) => {
                     if self.git_panel.active_tab == crate::components::git_panel::GitTab::Actions {
                         self.git_panel.load_actions();
+                    } else if self.git_panel.active_tab == crate::components::git_panel::GitTab::PRs {
+                        self.git_panel.load_pull_requests();
                     }
                     Action::Noop
                 }
                 (KeyModifiers::NONE, KeyCode::Char('o')) => {
                     if self.git_panel.active_tab == crate::components::git_panel::GitTab::Actions {
                         self.git_panel.open_selected_action_url();
+                    } else if self.git_panel.active_tab == crate::components::git_panel::GitTab::PRs {
+                        self.git_panel.open_selected_pr_url();
                     }
+                    Action::Noop
+                }
+                (KeyModifiers::NONE, KeyCode::Char('f')) if self.git_panel.active_tab == crate::components::git_panel::GitTab::PRs => {
+                    self.git_panel.pr_filter = self.git_panel.pr_filter.cycle();
+                    self.git_panel.selected = 0;
+                    self.git_panel.load_pull_requests();
+                    Action::Noop
+                }
+                (KeyModifiers::NONE, KeyCode::Char('1')) if self.git_panel.active_tab == crate::components::git_panel::GitTab::PRs => {
+                    self.git_panel.pr_filter = crate::components::git_panel::PrFilter::Open;
+                    self.git_panel.selected = 0;
+                    self.git_panel.load_pull_requests();
+                    Action::Noop
+                }
+                (KeyModifiers::NONE, KeyCode::Char('2')) if self.git_panel.active_tab == crate::components::git_panel::GitTab::PRs => {
+                    self.git_panel.pr_filter = crate::components::git_panel::PrFilter::ReviewRequested;
+                    self.git_panel.selected = 0;
+                    self.git_panel.load_pull_requests();
+                    Action::Noop
+                }
+                (KeyModifiers::NONE, KeyCode::Char('3')) if self.git_panel.active_tab == crate::components::git_panel::GitTab::PRs => {
+                    self.git_panel.pr_filter = crate::components::git_panel::PrFilter::Reviewed;
+                    self.git_panel.selected = 0;
+                    self.git_panel.load_pull_requests();
                     Action::Noop
                 }
                 (KeyModifiers::NONE, KeyCode::Enter) => {
@@ -643,7 +722,140 @@ impl App {
                             }
                         }
                         crate::components::git_panel::GitTab::Stash => Action::GitStashPop,
+                        crate::components::git_panel::GitTab::PRs => {
+                            self.open_diff_for_pr();
+                            Action::Noop
+                        }
                         _ => Action::Noop,
+                    }
+                }
+                _ => Action::Noop,
+            }
+        }
+    }
+
+    fn handle_worktree_panel_key(&mut self, key: KeyEvent) -> Action {
+        use crate::components::worktree_panel::{CreateField, WorktreeTab};
+
+        if self.worktree_panel.active_tab == WorktreeTab::Create {
+            match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Esc) => {
+                    if self.worktree_panel.branch_input.is_empty() {
+                        self.worktree_panel.reset();
+                        Action::EnterMode(EditorMode::Normal)
+                    } else {
+                        self.worktree_panel.branch_input.clear();
+                        self.worktree_panel.active_tab = WorktreeTab::List;
+                        Action::Noop
+                    }
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('w')) => {
+                    self.worktree_panel.reset();
+                    Action::EnterMode(EditorMode::Normal)
+                }
+                (KeyModifiers::NONE, KeyCode::Tab) => {
+                    self.worktree_panel.create_field = match self.worktree_panel.create_field {
+                        CreateField::Branch => CreateField::BaseBranch,
+                        CreateField::BaseBranch => CreateField::Branch,
+                    };
+                    Action::Noop
+                }
+                (KeyModifiers::NONE, KeyCode::Enter) => {
+                    let branch = self.worktree_panel.branch_input.clone();
+                    let base = self.worktree_panel.base_branch_input.clone();
+                    if branch.is_empty() {
+                        self.worktree_panel.message = "Branch name cannot be empty".to_string();
+                        Action::Noop
+                    } else {
+                        self.worktree_panel.creating = true;
+                        self.worktree_panel.message = format!("Creating worktree for '{}'...", branch);
+                        Action::WorktreeCreate { branch, base }
+                    }
+                }
+                (KeyModifiers::NONE, KeyCode::Backspace) => {
+                    match self.worktree_panel.create_field {
+                        CreateField::Branch => { self.worktree_panel.branch_input.pop(); }
+                        CreateField::BaseBranch => { self.worktree_panel.base_branch_input.pop(); }
+                    }
+                    Action::Noop
+                }
+                (KeyModifiers::NONE, KeyCode::Char(c))
+                | (KeyModifiers::SHIFT, KeyCode::Char(c)) => {
+                    match self.worktree_panel.create_field {
+                        CreateField::Branch => self.worktree_panel.branch_input.push(c),
+                        CreateField::BaseBranch => self.worktree_panel.base_branch_input.push(c),
+                    }
+                    Action::Noop
+                }
+                _ => Action::Noop,
+            }
+        } else {
+            // List tab
+            match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Esc)
+                | (KeyModifiers::CONTROL, KeyCode::Char('w')) => {
+                    self.worktree_panel.reset();
+                    Action::EnterMode(EditorMode::Normal)
+                }
+                (KeyModifiers::NONE, KeyCode::Tab) => {
+                    self.worktree_panel.next_tab();
+                    Action::Noop
+                }
+                (KeyModifiers::SHIFT, KeyCode::BackTab) => {
+                    self.worktree_panel.prev_tab();
+                    Action::Noop
+                }
+                (KeyModifiers::NONE, KeyCode::Char('j')) | (KeyModifiers::NONE, KeyCode::Down) => {
+                    self.worktree_panel.move_down();
+                    Action::Noop
+                }
+                (KeyModifiers::NONE, KeyCode::Char('k')) | (KeyModifiers::NONE, KeyCode::Up) => {
+                    self.worktree_panel.move_up();
+                    Action::Noop
+                }
+                (KeyModifiers::NONE, KeyCode::Char('y')) if self.worktree_panel.confirm_delete => {
+                    if let Some(wt) = self.worktree_panel.selected_worktree() {
+                        let path = wt.path.clone();
+                        self.worktree_panel.confirm_delete = false;
+                        Action::WorktreeRemove { path }
+                    } else {
+                        Action::Noop
+                    }
+                }
+                (KeyModifiers::NONE, KeyCode::Char('n')) => {
+                    if self.worktree_panel.confirm_delete {
+                        self.worktree_panel.confirm_delete = false;
+                    } else {
+                        self.worktree_panel.active_tab = WorktreeTab::Create;
+                        self.worktree_panel.create_field = CreateField::Branch;
+                        if let Some(repo) = &self.git_repo {
+                            repo.request_branches();
+                        }
+                    }
+                    Action::Noop
+                }
+                (KeyModifiers::NONE, KeyCode::Char('d')) => {
+                    if let Some(wt) = self.worktree_panel.selected_worktree() {
+                        if wt.is_main {
+                            self.worktree_panel.message = "Cannot delete the main worktree".to_string();
+                        } else if !self.worktree_panel.confirm_delete {
+                            self.worktree_panel.confirm_delete = true;
+                        }
+                    }
+                    Action::Noop
+                }
+                (KeyModifiers::SHIFT, KeyCode::Char('P')) => {
+                    Action::WorktreePrune
+                }
+                (KeyModifiers::NONE, KeyCode::Char('r')) => {
+                    Action::WorktreeList
+                }
+                (KeyModifiers::NONE, KeyCode::Enter) => {
+                    if let Some(wt) = self.worktree_panel.selected_worktree() {
+                        let path = wt.path.clone();
+                        Action::WorktreeOpenTerminal(path)
+                    } else {
+                        Action::Noop
                     }
                 }
                 _ => Action::Noop,
@@ -667,6 +879,7 @@ impl App {
                         match self.mode {
                             EditorMode::FuzzyFinder => { self.fuzzy_finder.reset(); }
                             EditorMode::GitPanel => { self.git_panel.reset(); }
+                            EditorMode::WorktreePanel => { self.worktree_panel.reset(); }
                             EditorMode::Tutorial => { self.tutorial.reset(); }
                             _ => {}
                         }
@@ -685,6 +898,11 @@ impl App {
                                 self.activity_bar.active = ActivityItem::Search;
                                 self.mode = EditorMode::Normal;
                                 return Action::EnterMode(EditorMode::FuzzyFinder);
+                            }
+                            ActivityItem::Worktree => {
+                                self.activity_bar.active = ActivityItem::Worktree;
+                                self.mode = EditorMode::Normal;
+                                return Action::EnterMode(EditorMode::WorktreePanel);
                             }
                             ActivityItem::Terminal => {
                                 return Action::ToggleTerminal;
@@ -755,7 +973,52 @@ impl App {
                             }
                         }
                     }
+                    // Click on PR filter buttons
+                    if self.git_panel.active_tab == crate::components::git_panel::GitTab::PRs {
+                        // Filter bar is at content area top (inner.y + 2: after tabs + separator)
+                        let filter_y = inner.y + 2;
+                        if y == filter_y {
+                            use crate::components::git_panel::PrFilter;
+                            let filters = [PrFilter::Open, PrFilter::ReviewRequested, PrFilter::Reviewed];
+                            let rel_x = x.saturating_sub(inner.x) as usize;
+                            let mut pos = 0usize;
+                            for f in &filters {
+                                let is_active = *f == self.git_panel.pr_filter;
+                                let label_len = if is_active {
+                                    f.label().len() + 4 // " [label] "
+                                } else {
+                                    f.label().len() + 4 // "  label  "
+                                };
+                                if rel_x < pos + label_len {
+                                    if *f != self.git_panel.pr_filter {
+                                        self.git_panel.pr_filter = *f;
+                                        self.git_panel.selected = 0;
+                                        self.git_panel.load_pull_requests();
+                                    }
+                                    return Action::Noop;
+                                }
+                                pos += label_len + 1; // +1 for "│" divider
+                            }
+                            return Action::Noop;
+                        }
+                    }
                 }
+
+                // Worktree panel click (overlay) - delete button
+                if self.mode == EditorMode::WorktreePanel
+                    && self.worktree_panel.active_tab == crate::components::worktree_panel::WorktreeTab::List
+                {
+                    if let Some(wt_idx) = self.worktree_panel.click_delete_at(x, y) {
+                        if let Some(wt) = self.worktree_panel.worktrees.get(wt_idx) {
+                            if !wt.is_main {
+                                self.worktree_panel.selected = wt_idx;
+                                self.worktree_panel.confirm_delete = true;
+                            }
+                        }
+                        return Action::Noop;
+                    }
+                }
+
                 let tree_width = if self.file_tree.visible {
                     self.config.file_tree.width
                 } else {
@@ -827,6 +1090,16 @@ impl App {
                                 match self.terminal_panel.tab_click(x, term_area) {
                                     TabClickResult::NewTerminal => {
                                         return Action::NewTerminal;
+                                    }
+                                    TabClickResult::Closed => {
+                                        if self.terminal_panel.terminals_count() == 0 {
+                                            self.focus = FocusTarget::Editor;
+                                        }
+                                        self.maybe_switch_workspace_for_terminal();
+                                        return Action::Noop;
+                                    }
+                                    TabClickResult::Switched => {
+                                        self.maybe_switch_workspace_for_terminal();
                                     }
                                     _ => {}
                                 }
@@ -917,6 +1190,14 @@ impl App {
                     }
                     EditorMode::GitPanel => {
                         self.refresh_git_tab();
+                    }
+                    EditorMode::WorktreePanel => {
+                        self.worktree_panel.reset();
+                        self.activity_bar.active = ActivityItem::Worktree;
+                        if let Some(repo) = &self.git_repo {
+                            repo.request_worktree_list();
+                            repo.request_branches();
+                        }
                     }
                     EditorMode::GlobalSearch => {
                         self.global_search.reset();
@@ -1135,6 +1416,36 @@ impl App {
             Action::GitRefresh => {
                 self.refresh_git_tab();
             }
+            Action::WorktreeList => {
+                if let Some(repo) = &self.git_repo {
+                    repo.request_worktree_list();
+                }
+            }
+            Action::WorktreeCreate { branch, base } => {
+                if let Some(repo) = &self.git_repo {
+                    repo.request_worktree_add(branch, base);
+                }
+            }
+            Action::WorktreeRemove { path } => {
+                if let Some(repo) = &self.git_repo {
+                    repo.request_worktree_remove(path, true);
+                }
+            }
+            Action::WorktreePrune => {
+                if let Some(repo) = &self.git_repo {
+                    repo.request_worktree_prune();
+                }
+            }
+            Action::WorktreeOpenTerminal(path) => {
+                self.worktree_panel.reset();
+                self.mode = EditorMode::Normal;
+                self.terminal_panel.visible = true;
+                let cols = if self.terminal_panel.last_cols > 0 { self.terminal_panel.last_cols } else { self.last_area.width.saturating_sub(crate::layout::ACTIVITY_BAR_WIDTH) };
+                let rows = self.terminal_panel.height.saturating_sub(1);
+                self.terminal_panel.spawn_terminal_in_dir(cols, rows, &path);
+                self.focus = FocusTarget::Terminal;
+                self.switch_workspace(PathBuf::from(&path));
+            }
             Action::StatusMessage(msg) => {
                 self.status_message = msg;
             }
@@ -1175,9 +1486,11 @@ impl App {
             }
             Action::NextTerminalTab => {
                 self.terminal_panel.next_tab();
+                self.maybe_switch_workspace_for_terminal();
             }
             Action::PrevTerminalTab => {
                 self.terminal_panel.prev_tab();
+                self.maybe_switch_workspace_for_terminal();
             }
             _ => {}
         }
@@ -1296,6 +1609,44 @@ impl App {
         self.editor.ensure_cursor_visible(doc, scroll_padding);
     }
 
+    fn switch_workspace(&mut self, new_root: PathBuf) {
+        if self.workspace_root == new_root {
+            return;
+        }
+        self.workspace_root = new_root.clone();
+
+        // Recreate git repo for the new workspace
+        match k_git::GitRepository::open(&self.workspace_root) {
+            Ok(repo) => {
+                self.current_branch = repo.current_branch.clone();
+                self.git_repo = Some(repo);
+            }
+            Err(_) => {
+                self.git_repo = None;
+                self.current_branch = String::new();
+            }
+        }
+
+        // Update file tree
+        self.file_tree.set_root(self.workspace_root.clone());
+
+        // Invalidate fuzzy finder and global search caches
+        self.fuzzy_finder.set_root(self.workspace_root.clone());
+        self.global_search.set_root(self.workspace_root.clone());
+
+        // Refresh git panel if open
+        if self.mode == EditorMode::GitPanel {
+            self.refresh_git_tab();
+        }
+    }
+
+    fn maybe_switch_workspace_for_terminal(&mut self) {
+        if let Some(dir) = self.terminal_panel.active_working_dir() {
+            let new_root = PathBuf::from(dir);
+            self.switch_workspace(new_root);
+        }
+    }
+
     fn refresh_git_tab(&mut self) {
         if let Some(ref repo) = self.git_repo {
             match self.git_panel.active_tab {
@@ -1308,6 +1659,9 @@ impl App {
                 crate::components::git_panel::GitTab::Log => repo.request_log(100),
                 crate::components::git_panel::GitTab::Actions => {
                     self.git_panel.load_actions();
+                }
+                crate::components::git_panel::GitTab::PRs => {
+                    self.git_panel.load_pull_requests();
                 }
             }
         }
@@ -1330,7 +1684,8 @@ impl App {
                     self.git_panel.log_entries = commits;
                 }
                 k_git::GitResponse::Branches(branches) => {
-                    self.git_panel.branches = branches;
+                    self.git_panel.branches = branches.clone();
+                    self.worktree_panel.branches = branches;
                 }
                 k_git::GitResponse::Stashes(stashes) => {
                     self.git_panel.stashes = stashes;
@@ -1410,6 +1765,69 @@ impl App {
                         self.status_message = format!("Stash pop failed: {}", e);
                     }
                 },
+                k_git::GitResponse::Worktrees(worktrees) => {
+                    self.worktree_panel.worktrees = worktrees;
+                    if self.worktree_panel.selected >= self.worktree_panel.worktrees.len() {
+                        self.worktree_panel.selected = self.worktree_panel.worktrees.len().saturating_sub(1);
+                    }
+                }
+                k_git::GitResponse::WorktreeAdded(result) => {
+                    self.worktree_panel.creating = false;
+                    match result {
+                        Ok(path) => {
+                            self.worktree_panel.message = format!("Worktree created: {}", path);
+                            self.worktree_panel.branch_input.clear();
+                            self.worktree_panel.active_tab = crate::components::worktree_panel::WorktreeTab::List;
+                            if let Some(repo) = &self.git_repo {
+                                repo.request_worktree_list();
+                            }
+
+                            // Auto-open terminal and run setup commands
+                            let setup_cmds = detect_setup_commands(&path);
+                            self.worktree_panel.reset();
+                            self.mode = EditorMode::Normal;
+                            self.terminal_panel.visible = true;
+                            let cols = if self.terminal_panel.last_cols > 0 {
+                                self.terminal_panel.last_cols
+                            } else {
+                                self.last_area.width.saturating_sub(crate::layout::ACTIVITY_BAR_WIDTH)
+                            };
+                            let rows = self.terminal_panel.height.saturating_sub(1);
+                            self.terminal_panel.spawn_terminal_in_dir(cols, rows, &path);
+                            self.focus = FocusTarget::Terminal;
+
+                            if !setup_cmds.is_empty() {
+                                let cmd_str = format!("{}\r", setup_cmds.join(" && "));
+                                self.terminal_panel.write_to_active(cmd_str.as_bytes());
+                            }
+                        }
+                        Err(e) => {
+                            self.worktree_panel.message = format!("Failed: {}", e);
+                        }
+                    }
+                }
+                k_git::GitResponse::WorktreeRemoved(result) => match result {
+                    Ok(()) => {
+                        self.worktree_panel.message = "Worktree removed".to_string();
+                        if let Some(repo) = &self.git_repo {
+                            repo.request_worktree_list();
+                        }
+                    }
+                    Err(e) => {
+                        self.worktree_panel.message = format!("Remove failed: {}", e);
+                    }
+                },
+                k_git::GitResponse::WorktreePruned(result) => match result {
+                    Ok(()) => {
+                        self.worktree_panel.message = "Worktrees pruned".to_string();
+                        if let Some(repo) = &self.git_repo {
+                            repo.request_worktree_list();
+                        }
+                    }
+                    Err(e) => {
+                        self.worktree_panel.message = format!("Prune failed: {}", e);
+                    }
+                },
                 _ => {}
             }
         }
@@ -1431,7 +1849,7 @@ impl App {
         ];
 
         let walker = ignore::WalkBuilder::new(&self.workspace_root)
-            .hidden(true)
+            .hidden(false)
             .git_ignore(true)
             .build();
 
@@ -1552,6 +1970,9 @@ impl App {
         if self.mode == EditorMode::GitPanel {
             self.git_panel.render(frame, area, &self.theme);
         }
+        if self.mode == EditorMode::WorktreePanel {
+            self.worktree_panel.render(frame, area, &self.theme);
+        }
         if self.mode == EditorMode::GlobalSearch {
             self.global_search.render(frame, area, &self.theme, &self.highlighter);
         }
@@ -1583,4 +2004,33 @@ fn extract_word_at(line: &str, col: usize) -> String {
 
 fn is_word_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
+}
+
+fn detect_setup_commands(dir: &str) -> Vec<String> {
+    let path = std::path::Path::new(dir);
+    let mut cmds = Vec::new();
+
+    if path.join(".tool-versions").exists() {
+        cmds.push("mise install 2>/dev/null || asdf install".to_string());
+    }
+    if path.join("Gemfile").exists() {
+        cmds.push("bundle install".to_string());
+    }
+    if path.join("package.json").exists() {
+        if path.join("yarn.lock").exists() {
+            cmds.push("yarn install".to_string());
+        } else {
+            cmds.push("npm install".to_string());
+        }
+    }
+    if path.join("requirements.txt").exists() {
+        cmds.push("pip install -r requirements.txt".to_string());
+    }
+    if path.join("go.mod").exists() {
+        cmds.push("go mod download".to_string());
+    }
+    if path.join("Cargo.toml").exists() {
+        cmds.push("cargo fetch".to_string());
+    }
+    cmds
 }

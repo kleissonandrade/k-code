@@ -47,8 +47,8 @@ impl FuzzyFinderComponent {
         }
         self.all_files.clear();
         let walker = WalkBuilder::new(&self.root)
-            .hidden(true)
-            .git_ignore(false)
+            .hidden(false)
+            .git_ignore(true)
             .build();
 
         for entry in walker.flatten() {
@@ -62,6 +62,17 @@ impl FuzzyFinderComponent {
 
     pub fn invalidate_cache(&mut self) {
         self.files_loaded = false;
+    }
+
+    pub fn set_root(&mut self, new_root: PathBuf) {
+        self.root = new_root;
+        self.files_loaded = false;
+        self.all_files.clear();
+        self.filtered.clear();
+        self.input.clear();
+        self.cursor_pos = 0;
+        self.selected = 0;
+        self.hovered = None;
     }
 
     pub fn reset(&mut self) {
@@ -97,7 +108,12 @@ impl FuzzyFinderComponent {
     }
 
     pub fn insert_char(&mut self, c: char) {
-        self.input.insert(self.cursor_pos, c);
+        // cursor_pos tracks char count, not byte offset
+        let byte_idx = self.input.char_indices()
+            .nth(self.cursor_pos)
+            .map(|(i, _)| i)
+            .unwrap_or(self.input.len());
+        self.input.insert(byte_idx, c);
         self.cursor_pos += 1;
         self.selected = 0;
         self.filter();
@@ -106,7 +122,13 @@ impl FuzzyFinderComponent {
     pub fn delete_char(&mut self) {
         if self.cursor_pos > 0 {
             self.cursor_pos -= 1;
-            self.input.remove(self.cursor_pos);
+            let byte_idx = self.input.char_indices()
+                .nth(self.cursor_pos)
+                .map(|(i, _)| i)
+                .unwrap_or(self.input.len());
+            if byte_idx < self.input.len() {
+                self.input.remove(byte_idx);
+            }
             self.selected = 0;
             self.filter();
         }
@@ -140,6 +162,9 @@ impl FuzzyFinderComponent {
 
         scored.sort_by(|a, b| b.1.cmp(&a.1));
         self.filtered = scored.into_iter().take(50).collect();
+        if self.selected >= self.filtered.len() {
+            self.selected = 0;
+        }
     }
 
     pub fn move_up(&mut self) {
